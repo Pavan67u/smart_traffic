@@ -1,0 +1,68 @@
+version: "3.9"
+services:
+  api:
+    build:
+      context: .
+    image: smart-traffic-api:dev
+    command: uvicorn api.main:app --host 0.0.0.0 --port 8000 --reload
+    volumes:
+      - ../:/app
+    environment:
+      - DATABASE_URL=postgresql://postgres:postgres@db:5432/traffic
+      - REDIS_URL=redis://redis:6379/0
+      - S3_ENDPOINT=http://minio:9000
+      - S3_ACCESS_KEY=minio
+      - S3_SECRET_KEY=minio123
+      - S3_BUCKET=traffic-evidence
+    ports:
+      - "8000:8000"
+    depends_on:
+      - db
+      - redis
+      - minio
+
+  worker:
+    image: smart-traffic-api:dev
+    command: python workers/detector_worker.py
+    volumes:
+      - ../:/app
+    environment:
+      - DATABASE_URL=postgresql://postgres:postgres@db:5432/traffic
+      - REDIS_URL=redis://redis:6379/0
+      - S3_ENDPOINT=http://minio:9000
+      - S3_ACCESS_KEY=minio
+      - S3_SECRET_KEY=minio123
+      - S3_BUCKET=traffic-evidence
+    depends_on:
+      - api
+
+  db:
+    image: postgres:15
+    environment:
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_DB=traffic
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7
+    ports:
+      - "6379:6379"
+
+  minio:
+    image: minio/minio:RELEASE.2024-10-13T01-48-20Z
+    command: server /data --console-address ":9001"
+    environment:
+      - MINIO_ROOT_USER=minio
+      - MINIO_ROOT_PASSWORD=minio123
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio:/data
+
+volumes:
+  pgdata:
+  minio:

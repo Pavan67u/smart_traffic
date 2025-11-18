@@ -1,0 +1,6 @@
+# Dataset configuration
+path: ../data/vehicles_yolo  # path relative to training/yolo directory
+train: train/images
+val: val/images
+test: test/images  # optional
+names: [car, bus, truck, motorbike, person]

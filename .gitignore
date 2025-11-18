@@ -1,0 +1,15 @@
+.venv/
+.venv311/
+.venv_mac/
+.env
+__pycache__/
+*.pyc
+resume_training.log
+training_output.log
+runs/
+*.pt
+data/
+.DS_Store
+Thumbs.db
+.vscode/
+*.log
