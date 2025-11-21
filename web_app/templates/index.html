@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Smart Traffic - Inference</title>
+    <style>
+      body { font-family: Arial, sans-serif; margin: 40px; }
+      .preview { margin-top: 20px; }
+    </style>
+  </head>
+  <body>
+    <h1>Upload an image for inference</h1>
+    <form action="/predict" method="post" enctype="multipart/form-data">
+      <input type="file" name="file" accept="image/*" required>
+      <button type="submit">Upload & Predict</button>
+    </form>
+
+    {% if request.args.get('result') or img_url %}
+    <div class="preview">
+      <h2>Result</h2>
+      {% set result_param = request.args.get('result') %}
+      {% if result_param %}
+        {# compute static path for the image #}
+        {% set img_url = '/static/' + result_param %}
+      {% endif %}
+
+      {% if img_url and img_url != '' %}
+        {% set run_dir = img_url.rsplit('/', 1)[0] %}
+        {# compute class counts server-side by reading labels on refresh; template will show placeholder while JS polls #}
+        <p id="classCounts">Loading results...</p>
+        <img id="result-img" src="{{ img_url }}" alt="result image" style="max-width:800px; display:block; margin-top:10px;">
+        <script>
+        // Auto-reload the image until it successfully loads (cache-busted)
+        (function(){
+          const img = document.getElementById('result-img');
+          const countsEl = document.getElementById('classCounts');
+          let tries = 0;
+          function check(){
+            tries += 1;
+            const url = img.src.split('?')[0] + '?t=' + Date.now();
+            const tester = new Image();
+            tester.onload = function(){
+              // image available; set src to the cache-busted URL
+              img.src = url;
+              // fetch label counts from server endpoint
+              fetch('/_result_counts?path=' + encodeURIComponent('{{ img_url }}'))
+                .then(r => r.json())
+                .then(data => {
+                  if (data && Object.keys(data).length>0){
+                    let html = '';
+                    for (const [k,v] of Object.entries(data)) html += `<strong>${k}</strong>: ${v}&nbsp;&nbsp;`;
+                    countsEl.innerHTML = html;
+                  } else {
+                    countsEl.innerText = 'No detections.';
+                  }
+                }).catch(e => { countsEl.innerText = 'Results ready'; });
+            };
+            tester.onerror = function(){
+              if (tries < 20) setTimeout(check, 1000);
+              else countsEl.innerText = 'Could not load result image.';
+            };
+            tester.src = url;
+          }
+          check();
+        })();
+        </script>
+      {% else %}
+        <p>No results available yet.</p>
+      {% endif %}
+    </div>
+    {% endif %}
+  </body>
+</html>

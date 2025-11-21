@@ -1,5 +1,5 @@
 # Dataset configuration
-path: ../data/vehicles_yolo  # path relative to training/yolo directory
+path: /Users/Pavan/projects/smart_traffic/data/vehicles_yolo  # absolute path to dataset
 train: train/images
 val: val/images
 test: test/images  # optional

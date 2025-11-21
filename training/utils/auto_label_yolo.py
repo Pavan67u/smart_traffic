@@ -45,6 +45,16 @@ def auto_label_images(image_dir, output_dir, model_name='yolov8n.pt', conf_thres
     labeled_count = 0
     empty_count = 0
     
+    # Define the target class names we want in our dataset and their order
+    # These should match `training/yolo/data_vehicles.yaml` names order.
+    target_names = ['car', 'bus', 'truck', 'motorbike', 'person']
+
+    # Get pretrained model's class name map (if available)
+    try:
+        pretrained_names = model.names
+    except Exception:
+        pretrained_names = None
+
     # Process each image
     for image_file in tqdm(image_files, desc="Auto-labeling images"):
         image_path = os.path.join(image_dir, image_file)
@@ -73,19 +83,62 @@ def auto_label_images(image_dir, output_dir, model_name='yolov8n.pt', conf_thres
             with open(label_file, 'w') as f:
                 if len(detections) > 0:
                     # Write detections in YOLO format
-                    for detection in detections:
+                    # Try to read class ids from detections and map to our target classes
+                    # We'll iterate by index so we can access detection arrays safely.
+                    try:
+                        # detection arrays exposed on results[0].boxes
+                        xyxy_arr = detections.xyxy.cpu().numpy()
+                        conf_arr = None
+                        cls_arr = None
+                        if hasattr(detections, 'conf'):
+                            try:
+                                conf_arr = detections.conf.cpu().numpy()
+                            except Exception:
+                                conf_arr = None
+                        if hasattr(detections, 'cls'):
+                            try:
+                                cls_arr = detections.cls.cpu().numpy().astype(int)
+                            except Exception:
+                                cls_arr = None
+                    except Exception:
+                        # Fallback: iterate object-wise
+                        xyxy_arr = None
+                        cls_arr = None
+
+                    for i, det in enumerate(detections):
                         # Get bounding box
-                        x1, y1, x2, y2 = detection.xyxy[0].tolist()
-                        
+                        if xyxy_arr is not None:
+                            x1, y1, x2, y2 = xyxy_arr[i][:4].tolist()
+                        else:
+                            x1, y1, x2, y2 = det.xyxy[0].tolist()
+
                         # Convert to center format and normalize
                         x_center = ((x1 + x2) / 2) / width
                         y_center = ((y1 + y2) / 2) / height
                         box_width = (x2 - x1) / width
                         box_height = (y2 - y1) / height
-                        
-                        # Get class (all as vehicle class 0 for now)
-                        class_id = 0
-                        
+
+                        # Determine class id: map pretrained class name to our target classes
+                        class_id = None
+                        pred_cls = None
+                        if cls_arr is not None:
+                            pred_cls = int(cls_arr[i])
+                        else:
+                            # try attribute access
+                            try:
+                                raw = det.cls
+                                pred_cls = int(raw[0]) if hasattr(raw, '__len__') else int(raw)
+                            except Exception:
+                                pred_cls = None
+
+                        if pred_cls is not None and pretrained_names is not None:
+                            pred_name = pretrained_names.get(pred_cls, None) if isinstance(pretrained_names, dict) else (pretrained_names[pred_cls] if pred_cls < len(pretrained_names) else None)
+                            if pred_name in target_names:
+                                class_id = target_names.index(pred_name)
+                        # If we couldn't map, default to 0 (car) to preserve previous behavior
+                        if class_id is None:
+                            class_id = 0
+
                         # Write to file
                         f.write(f"{class_id} {x_center:.6f} {y_center:.6f} {box_width:.6f} {box_height:.6f}\n")
                     
