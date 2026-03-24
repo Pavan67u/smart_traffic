@@ -62,6 +62,16 @@ TARGET_NAMES = []
 model: Optional[Any] = None
 model_to_target_map: dict = {}  # maps model_cls_id -> target_cls_id
 
+# Only these class names are used for tracking/rule evaluation by default.
+MONITORED_TRAFFIC_CLASSES = {
+    'car', 'bus', 'truck', 'motorcycle', 'motorbike', 'bicycle',
+    'auto', 'auto-rickshaw', 'autorickshaw'
+}
+
+
+def is_monitored_class(class_name: str) -> bool:
+    return class_name.strip().lower() in MONITORED_TRAFFIC_CLASSES
+
 try:
     from ultralytics import YOLO
     model = YOLO(str(MODEL_PATH))
@@ -83,10 +93,41 @@ except Exception as e:
 
 # tracking + rules integration
 try:
-    from web_app.utils.tracking_manager import update_and_check, CAMERA_CONFIG
+    from web_app.utils.tracking_manager import (
+        update_and_check,
+        CAMERA_CONFIG,
+        get_runtime_metrics,
+        get_rule_geometry,
+        reload_camera_config,
+    )
 except Exception:
     update_and_check = None
     CAMERA_CONFIG = {}
+    get_runtime_metrics = None
+    get_rule_geometry = None
+    reload_camera_config = None
+
+
+DRAW_RULE_OVERLAY = os.environ.get('DRAW_RULE_OVERLAY', '1').strip() not in {'0', 'false', 'False'}
+
+
+def draw_rule_overlay(frame, camera_id='default'):
+    if frame is None or get_rule_geometry is None:
+        return
+    geom = get_rule_geometry(camera_id=camera_id, frame_shape=getattr(frame, 'shape', None)) or {}
+
+    stop_zone = geom.get('stop_zone')
+    if stop_zone and len(stop_zone) >= 3:
+        pts = np.array(stop_zone, dtype=np.int32)
+        cv2.polylines(frame, [pts], isClosed=True, color=(0, 165, 255), thickness=2)
+        cv2.putText(frame, 'STOP ZONE', tuple(pts[0]), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 165, 255), 2)
+
+    lane_line = geom.get('lane_line')
+    if lane_line and len(lane_line) == 2:
+        p1 = tuple(map(int, lane_line[0]))
+        p2 = tuple(map(int, lane_line[1]))
+        cv2.line(frame, p1, p2, (255, 0, 255), 2)
+        cv2.putText(frame, 'LANE LINE', p1, cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 0, 255), 2)
 
 
 def process_video(input_path, output_path, run_id, camera_id='default'):
@@ -154,6 +195,10 @@ def process_video(input_path, output_path, run_id, camera_id='default'):
                     mapped = model_to_target_map.get(c)
                     if mapped is None:
                         continue
+
+                    cname = TARGET_NAMES[mapped] if mapped < len(TARGET_NAMES) else str(mapped)
+                    if not is_monitored_class(cname):
+                        continue
                     
                     x1, y1, x2, y2 = map(int, b[:4])
                     detections.append({
@@ -164,10 +209,12 @@ def process_video(input_path, output_path, run_id, camera_id='default'):
                     })
                     
                     # Draw simple bbox for visual feedback
-                    cname = TARGET_NAMES[mapped]
                     label = f"{cname} {s:.2f}"
                     cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
                     cv2.putText(frame, label, (x1, y1-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+
+                if DRAW_RULE_OVERLAY:
+                    draw_rule_overlay(frame, camera_id=camera_id)
 
         # Tracking + Rules
         if update_and_check:
@@ -346,6 +393,8 @@ def predict():
                 if mapped is None:
                     continue
                 cname = TARGET_NAMES[mapped] if mapped < len(TARGET_NAMES) else str(mapped)
+                if not is_monitored_class(cname):
+                    continue
                 text = f"{cname} {conf:.2f}" if conf is not None else f"{cname}"
                 cv2.rectangle(img, (x1, y1), (x2, y2), (0, 255, 0), 2)
                 (tw, th), baseline = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 1)
@@ -359,6 +408,9 @@ def predict():
                 yolo_lines.append(f"{mapped} {xc:.6f} {yc:.6f} {bw:.6f} {bh:.6f}")
                 # normalized detection format for tracker: bbox ints, score, class
                 detections.append({"bbox": [x1, y1, x2, y2], "score": conf if conf is not None else 1.0, "class": mapped})
+
+        if DRAW_RULE_OVERLAY:
+            draw_rule_overlay(img, camera_id=camera_id)
 
         cv2.imwrite(str(saved_img_path), img)
         img_rel = os.path.relpath(str(saved_img_path), STATIC_DIR)
@@ -440,6 +492,9 @@ def predict_video():
     and process it frame-by-frame using the same pipeline as `process_video`.
     Returns the annotated video result page on success.
     """
+    if model is None:
+        return 'Model not loaded on server. Check server logs.', 500
+
     # allow either an uploaded file or a stream URL
     input_path = None
     filename = None
@@ -711,6 +766,102 @@ def health():
         'db': 'connected',
         'model': str(MODEL_PATH)
     })
+
+
+@app.route('/api/metrics')
+def metrics():
+    if get_runtime_metrics is None:
+        return jsonify({})
+    run_id = request.args.get('run_id')
+    camera_id = request.args.get('camera_id')
+    if run_id and camera_id:
+        return jsonify(get_runtime_metrics(run_id=run_id, camera_id=camera_id))
+    return jsonify(get_runtime_metrics())
+
+
+@app.route('/api/debug/rules')
+def debug_rules():
+    if get_rule_geometry is None:
+        return jsonify({})
+    camera_id = request.args.get('camera_id', 'default')
+    w = request.args.get('w', type=int)
+    h = request.args.get('h', type=int)
+    frame_shape = (h, w, 3) if w and h else None
+    return jsonify(get_rule_geometry(camera_id=camera_id, frame_shape=frame_shape))
+
+
+@app.route('/api/camera/calibration', methods=['POST'])
+def save_camera_calibration():
+    data = request.json or {}
+    target_camera_id = (data.get('camera_id') or 'default').strip()
+    save_as_camera_id = (data.get('save_as_camera_id') or '').strip()
+    camera_id = save_as_camera_id or target_camera_id
+    if not camera_id:
+        return jsonify({'error': 'camera_id is required'}), 400
+
+    try:
+        width = int(data.get('width'))
+        height = int(data.get('height'))
+    except Exception:
+        return jsonify({'error': 'width and height are required integers'}), 400
+
+    if width <= 0 or height <= 0:
+        return jsonify({'error': 'width and height must be > 0'}), 400
+
+    cfg_path = APP_ROOT / 'config' / 'cameras.json'
+    try:
+        if cfg_path.exists():
+            camera_cfg = json.loads(cfg_path.read_text())
+        else:
+            camera_cfg = {}
+    except Exception as e:
+        return jsonify({'error': f'Failed to read camera config: {e}'}), 500
+
+    source_camera_id = target_camera_id if target_camera_id in camera_cfg else 'default'
+    existing = camera_cfg.get(source_camera_id, {}) if save_as_camera_id else camera_cfg.get(camera_id, {})
+    updated = dict(existing)
+    updated['reference_resolution'] = [width, height]
+
+    description = data.get('description')
+    if description is not None:
+        updated['description'] = str(description)
+
+    stop_line_y = data.get('stop_line_y')
+    if stop_line_y is not None:
+        try:
+            stop_line_y = int(round(float(stop_line_y)))
+        except Exception:
+            return jsonify({'error': 'stop_line_y must be numeric'}), 400
+        stop_line_y = max(0, min(height, stop_line_y))
+        updated['stop_line_y'] = stop_line_y
+        updated['stop_zone'] = [[0, stop_line_y], [width, stop_line_y], [width, height], [0, height]]
+
+    lane_line = data.get('lane_line')
+    if lane_line is not None:
+        if not isinstance(lane_line, list) or len(lane_line) != 2:
+            return jsonify({'error': 'lane_line must be [[x1,y1],[x2,y2]]'}), 400
+        try:
+            p1 = [int(round(float(lane_line[0][0]))), int(round(float(lane_line[0][1])))]
+            p2 = [int(round(float(lane_line[1][0]))), int(round(float(lane_line[1][1])))]
+        except Exception:
+            return jsonify({'error': 'lane_line points must be numeric'}), 400
+        p1[0] = max(0, min(width, p1[0]))
+        p1[1] = max(0, min(height, p1[1]))
+        p2[0] = max(0, min(width, p2[0]))
+        p2[1] = max(0, min(height, p2[1]))
+        updated['lane_line'] = [p1, p2]
+
+    camera_cfg[camera_id] = updated
+    try:
+        cfg_path.parent.mkdir(parents=True, exist_ok=True)
+        cfg_path.write_text(json.dumps(camera_cfg, indent=2))
+    except Exception as e:
+        return jsonify({'error': f'Failed to write camera config: {e}'}), 500
+
+    if reload_camera_config is not None:
+        reload_camera_config()
+
+    return jsonify({'ok': True, 'camera_id': camera_id, 'config': updated})
 
 if __name__ == '__main__':
     # Use 0.0.0.0 for Docker visibility, but 5050 to avoid MacOS AirPlay conflict

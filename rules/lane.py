@@ -30,10 +30,10 @@ class LaneViolationRule:
         return side(prev_c) * side(cur_c) < 0
 
     def process_track(self, track_id, bbox, timestamp, frame_id, speed_px_s=None, class_id=None, score=None):
-        cx = (bbox[0]+bbox[2])/2.0
-        cy = (bbox[1]+bbox[3])/2.0
+        cx = (bbox[0] + bbox[2]) / 2.0
+        cy = (bbox[1] + bbox[3]) / 2.0
         c = (cx, cy)
-        
+
         # State: {'last_centroid': (x,y), 'creation_time': timestamp}
         state = self.track_states.get(track_id)
         if state is None:
@@ -43,13 +43,18 @@ class LaneViolationRule:
 
         prev_c = state['last_centroid']
         violation = None
-        
+
         if self._crosses_line(prev_c, c):
-             # False Positive Suppression
-             age = (timestamp - state['creation_time']).total_seconds()
-             if age >= 1.0:
-                 # Crossed the solid line!
-                 violation = {
+            # False positive suppression
+            age = (timestamp - state['creation_time']).total_seconds()
+            if age >= 1.0:
+                if state.get('last_violation_time') and (timestamp - state['last_violation_time']).total_seconds() < 2.0:
+                    state['last_centroid'] = c
+                    self.track_states[track_id] = state
+                    return None
+
+                # Crossed the solid line
+                violation = {
                     'event_id': str(uuid.uuid4()),
                     'event_type': 'lane_violation',
                     'track_id': track_id,
@@ -59,9 +64,10 @@ class LaneViolationRule:
                     'timestamp': timestamp.isoformat(),
                     'bbox': bbox,
                     'meta': {'lane_line': self.lane_line}
-                 }
-                 self._emit_event(violation)
-        
+                }
+                state['last_violation_time'] = timestamp
+                self._emit_event(violation)
+
         state['last_centroid'] = c
         self.track_states[track_id] = state
         return violation

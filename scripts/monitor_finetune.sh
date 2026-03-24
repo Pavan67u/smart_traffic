@@ -1,4 +1,3 @@
-Sorry, the indian-traffic-sign-image-dataset-y7g2q dataset does not exist, has been deleted, or is not shared with you.
 #!/usr/bin/env bash
 set -euo pipefail
 

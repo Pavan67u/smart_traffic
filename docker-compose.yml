@@ -5,7 +5,7 @@ services:
     build: .
     container_name: smart_traffic_web
     ports:
-      - "5000:5000"
+      - "5050:5050"
     volumes:
       # Persist models so user can add custom models
       - ./models:/app/models

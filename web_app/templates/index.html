@@ -440,6 +440,41 @@
       font-weight: 600;
     }
 
+    .calib-toolbar {
+      margin-top: 14px;
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+
+    .calib-toolbar input,
+    .calib-toolbar select {
+      padding: 8px 10px;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: #fff;
+      min-width: 180px;
+    }
+
+    .calib-toolbar .button {
+      width: auto;
+      padding: 8px 12px;
+    }
+
+    .calib-wrap {
+      position: relative;
+      display: inline-block;
+      max-width: 100%;
+    }
+
+    .calib-canvas {
+      position: absolute;
+      inset: 0;
+      pointer-events: auto;
+      cursor: crosshair;
+    }
+
     @media (max-width: 720px) {
       .hero {
         flex-direction: column;
@@ -584,13 +619,209 @@
     </video>
     <p>Video processing complete. Tracking data saved.</p>
     {% else %}
-    <img id="result-img" src="{{ img_url }}" alt="result image" class="result-media">
+    <div class="calib-wrap">
+      <img id="result-img" src="{{ img_url }}" alt="result image" class="result-media">
+      <canvas id="calib-canvas" class="calib-canvas"></canvas>
+    </div>
+    <div class="calib-toolbar" id="calib-tools">
+      <span class="hint" id="calib-status">Calibration: click "Set Stop Line" or "Set Lane Line" to start.</span>
+      <button type="button" class="button" id="calib-stop-btn">Set Stop Line (1 click)</button>
+      <button type="button" class="button" id="calib-lane-btn">Set Lane Line (2 clicks)</button>
+      <select id="calib-save-mode">
+        <option value="overwrite">Overwrite Current Camera</option>
+        <option value="new">Save As New Camera</option>
+      </select>
+      <input type="text" id="calib-new-camera-id" placeholder="new_camera_id" style="display:none;">
+      <input type="text" id="calib-desc" placeholder="Camera description (optional)">
+      <button type="button" class="button" id="calib-save-btn">Save Calibration</button>
+      <button type="button" class="button" id="calib-clear-btn">Clear Points</button>
+    </div>
 
     <script>
       // Auto-reload the image until it successfully loads (cache-busted)
       (function () {
         const img = document.getElementById('result-img');
         const countsEl = document.getElementById('classCounts');
+        const canvas = document.getElementById('calib-canvas');
+        const statusEl = document.getElementById('calib-status');
+        const stopBtn = document.getElementById('calib-stop-btn');
+        const laneBtn = document.getElementById('calib-lane-btn');
+        const saveBtn = document.getElementById('calib-save-btn');
+        const clearBtn = document.getElementById('calib-clear-btn');
+        const saveModeEl = document.getElementById('calib-save-mode');
+        const newCameraEl = document.getElementById('calib-new-camera-id');
+        const descEl = document.getElementById('calib-desc');
+
+        let calibMode = null;
+        let stopLineY = null;
+        let lanePts = [];
+
+        function fitCanvas() {
+          if (!img || !canvas) return;
+          canvas.width = img.clientWidth;
+          canvas.height = img.clientHeight;
+          drawCalibration();
+        }
+
+        function drawCalibration() {
+          if (!canvas) return;
+          const ctx = canvas.getContext('2d');
+          ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+          if (stopLineY !== null) {
+            ctx.strokeStyle = '#ff9800';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.moveTo(0, stopLineY);
+            ctx.lineTo(canvas.width, stopLineY);
+            ctx.stroke();
+          }
+
+          if (lanePts.length > 0) {
+            ctx.fillStyle = '#e91e63';
+            lanePts.forEach(p => {
+              ctx.beginPath();
+              ctx.arc(p.x, p.y, 4, 0, Math.PI * 2);
+              ctx.fill();
+            });
+          }
+
+          if (lanePts.length === 2) {
+            ctx.strokeStyle = '#e91e63';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.moveTo(lanePts[0].x, lanePts[0].y);
+            ctx.lineTo(lanePts[1].x, lanePts[1].y);
+            ctx.stroke();
+          }
+        }
+
+        function updateStatus(msg) {
+          if (statusEl) statusEl.textContent = msg;
+        }
+
+        function toImageCoords(evt) {
+          const rect = canvas.getBoundingClientRect();
+          return {
+            x: evt.clientX - rect.left,
+            y: evt.clientY - rect.top,
+          };
+        }
+
+        function normToRawX(x) {
+          return Math.round((x / canvas.width) * (img.naturalWidth || canvas.width));
+        }
+
+        function normToRawY(y) {
+          return Math.round((y / canvas.height) * (img.naturalHeight || canvas.height));
+        }
+
+        if (canvas) {
+          canvas.addEventListener('click', (evt) => {
+            if (!calibMode) return;
+            const p = toImageCoords(evt);
+
+            if (calibMode === 'stop') {
+              stopLineY = p.y;
+              updateStatus(`Stop line selected at y=${normToRawY(stopLineY)} (image px)`);
+              calibMode = null;
+            } else if (calibMode === 'lane') {
+              lanePts.push(p);
+              if (lanePts.length > 2) lanePts = lanePts.slice(-2);
+              if (lanePts.length === 2) {
+                updateStatus(`Lane line selected: (${normToRawX(lanePts[0].x)},${normToRawY(lanePts[0].y)}) -> (${normToRawX(lanePts[1].x)},${normToRawY(lanePts[1].y)})`);
+                calibMode = null;
+              } else {
+                updateStatus('Lane mode: click second point');
+              }
+            }
+            drawCalibration();
+          });
+        }
+
+        if (stopBtn) {
+          stopBtn.addEventListener('click', () => {
+            calibMode = 'stop';
+            updateStatus('Stop mode: click one point on image for stop line Y');
+          });
+        }
+
+        if (laneBtn) {
+          laneBtn.addEventListener('click', () => {
+            calibMode = 'lane';
+            lanePts = [];
+            updateStatus('Lane mode: click first point');
+            drawCalibration();
+          });
+        }
+
+        if (clearBtn) {
+          clearBtn.addEventListener('click', () => {
+            stopLineY = null;
+            lanePts = [];
+            calibMode = null;
+            updateStatus('Calibration cleared');
+            drawCalibration();
+          });
+        }
+
+        if (saveBtn) {
+          saveBtn.addEventListener('click', async () => {
+            const cameraId = document.getElementById('camera_select')?.value || 'default';
+            const saveMode = saveModeEl?.value || 'overwrite';
+            const saveAsCameraId = (newCameraEl?.value || '').trim();
+            const payload = {
+              camera_id: cameraId,
+              width: img.naturalWidth || canvas.width,
+              height: img.naturalHeight || canvas.height,
+            };
+            if (descEl && descEl.value.trim()) {
+              payload.description = descEl.value.trim();
+            }
+            if (saveMode === 'new') {
+              if (!saveAsCameraId) {
+                updateStatus('Save failed: enter new camera id');
+                return;
+              }
+              payload.save_as_camera_id = saveAsCameraId;
+            }
+            if (stopLineY !== null) {
+              payload.stop_line_y = normToRawY(stopLineY);
+            }
+            if (lanePts.length === 2) {
+              payload.lane_line = [
+                [normToRawX(lanePts[0].x), normToRawY(lanePts[0].y)],
+                [normToRawX(lanePts[1].x), normToRawY(lanePts[1].y)],
+              ];
+            }
+
+            try {
+              const res = await fetch('/api/camera/calibration', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload),
+              });
+              const data = await res.json();
+              if (!res.ok) {
+                updateStatus(`Save failed: ${data.error || 'unknown error'}`);
+                return;
+              }
+              updateStatus(`Calibration saved for camera '${data.camera_id || cameraId}'.`);
+            } catch (e) {
+              updateStatus('Save failed: network error');
+            }
+          });
+        }
+
+        if (saveModeEl) {
+          saveModeEl.addEventListener('change', () => {
+            const isNew = saveModeEl.value === 'new';
+            if (newCameraEl) newCameraEl.style.display = isNew ? 'inline-block' : 'none';
+          });
+        }
+
+        window.addEventListener('resize', fitCanvas);
+
         let tries = 0;
         function check() {
           tries += 1;
@@ -599,6 +830,7 @@
           tester.onload = function () {
             // image available; set src to the cache-busted URL
             img.src = url;
+            setTimeout(fitCanvas, 0);
             // fetch label counts from server endpoint
             fetch('/_result_counts?path=' + encodeURIComponent('{{ img_url }}'))
               .then(r => r.json())
@@ -651,12 +883,29 @@
         <div class="skeleton" style="width:55%;"></div>
       </div>
     </div>
+    <div class="chart" style="margin-top:16px;">
+      <div class="chart-header">
+        <h4>Monitoring Diagnostics</h4>
+      </div>
+      <p class="hint" style="margin-top:0;">Live tracking metrics and scaled rule geometry for current camera/run.</p>
+      <pre id="diag-metrics" style="white-space:pre-wrap; font-size:12px; color:var(--muted); max-height:180px; overflow:auto;">Loading metrics...</pre>
+      <pre id="diag-rules" style="white-space:pre-wrap; font-size:12px; color:var(--muted); max-height:220px; overflow:auto;">Loading rule geometry...</pre>
+    </div>
     <script>
       // Fetch and display recent violations
       (function() {
         let evidenceImages = [];
         let activeIndex = 0;
         let chartData = { type: {}, time: {} };
+        const metricsEl = document.getElementById('diag-metrics');
+        const rulesEl = document.getElementById('diag-rules');
+
+        function currentRunId() {
+          const params = new URLSearchParams(window.location.search);
+          const result = params.get('result') || '';
+          const m = result.match(/(run_[a-zA-Z0-9]+)/);
+          return m ? m[1] : null;
+        }
         function renderCharts(data) {
           const typeChart = document.getElementById('chart-type');
           const timeChart = document.getElementById('chart-time');
@@ -719,16 +968,17 @@
           link.click();
         }
 
-        function openModal(index) {
+        window.openModal = function(index) {
           activeIndex = index;
           const modal = document.getElementById('evidence-modal');
           const img = document.getElementById('evidence-img');
           img.style.transform = 'scale(1)';
+          img.dataset.scale = '1';
           img.src = evidenceImages[activeIndex];
           modal.style.display = 'flex';
         }
 
-        function closeModal() {
+        window.closeModal = function() {
           document.getElementById('evidence-modal').style.display = 'none';
         }
 
@@ -782,9 +1032,51 @@
               renderCharts([]);
             });
         }
+
+        function loadDiagnostics() {
+          const cameraId = document.getElementById('camera_select')?.value || 'default';
+          const runId = currentRunId();
+
+          const media = document.querySelector('.result-media');
+          let w = 1280, h = 720;
+          if (media) {
+            const mw = media.naturalWidth || media.videoWidth || media.clientWidth;
+            const mh = media.naturalHeight || media.videoHeight || media.clientHeight;
+            if (mw && mh) {
+              w = mw;
+              h = mh;
+            }
+          }
+
+          const metricsUrl = runId
+            ? `/api/metrics?run_id=${encodeURIComponent(runId)}&camera_id=${encodeURIComponent(cameraId)}`
+            : '/api/metrics';
+          fetch(metricsUrl)
+            .then(r => r.json())
+            .then(d => {
+              metricsEl.textContent = JSON.stringify(d, null, 2);
+            })
+            .catch(() => {
+              metricsEl.textContent = 'Could not load metrics';
+            });
+
+          const rulesUrl = `/api/debug/rules?camera_id=${encodeURIComponent(cameraId)}&w=${w}&h=${h}`;
+          fetch(rulesUrl)
+            .then(r => r.json())
+            .then(d => {
+              rulesEl.textContent = JSON.stringify(d, null, 2);
+            })
+            .catch(() => {
+              rulesEl.textContent = 'Could not load rule geometry';
+            });
+        }
+
         loadViolations();
+        loadDiagnostics();
         // Refresh violations every 5 seconds
         setInterval(loadViolations, 5000);
+        setInterval(loadDiagnostics, 5000);
+        document.getElementById('camera_select')?.addEventListener('change', loadDiagnostics);
       })();
     </script>
     {% else %}

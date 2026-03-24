@@ -48,4 +48,9 @@ echo "Model: $MODEL_PATH"
 echo "------------------------------------------------"
 
 export MODEL_PATH=$(pwd)/$MODEL_PATH
-PYTHONPATH=$(pwd) /Users/Pavan/projects/smart_traffic/.venv_mac/bin/python web_app/app.py
+PYTHON_BIN=${PYTHON_BIN:-"$(pwd)/.venv_mac/bin/python"}
+if [ ! -x "$PYTHON_BIN" ]; then
+    PYTHON_BIN=${PYTHON_BIN_FALLBACK:-python3}
+fi
+
+PYTHONPATH=$(pwd) "$PYTHON_BIN" web_app/app.py

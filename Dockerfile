@@ -32,7 +32,7 @@ COPY . /app
 RUN mkdir -p /app/web_app/static/uploads /app/web_app/static/results
 
 # Expose the Flask port
-EXPOSE 5000
+EXPOSE 5050
 
 # Run the application
 CMD ["python", "web_app/app.py"]

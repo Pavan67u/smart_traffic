@@ -27,7 +27,6 @@ class SimpleIoUTracker:
 
     def update(self, dets: List[List[float]]):
         # dets: list of [x1,y1,x2,y2,score,cls]
-        assigned = {}
         det_bboxes = [d[:4] for d in dets]
         det_cls = [int(d[5]) if len(d) > 5 else None for d in dets]
 
@@ -55,10 +54,12 @@ class SimpleIoUTracker:
                 used_det.add(best_di)
 
         # update matched
+        matched_tids = set()
         for tid, di in matches:
             self.tracks[tid]['bbox'] = det_bboxes[di]
             self.tracks[tid]['cls'] = det_cls[di]
             self.tracks[tid]['lost'] = 0
+            matched_tids.add(tid)
 
         # unmatched dets -> new tracks
         for di in range(len(det_bboxes)):
@@ -67,13 +68,19 @@ class SimpleIoUTracker:
                 self.next_id += 1
                 self.tracks[tid] = {'bbox': det_bboxes[di], 'cls': det_cls[di], 'lost': 0}
 
-        # age lost tracks
+        # Age only unmatched existing tracks. Matched and newly created tracks should
+        # not be penalized in the same frame.
         to_del = []
         for tid in list(self.tracks.keys()):
-            if self.tracks[tid]['lost'] >= self.max_lost:
-                to_del.append(tid)
-            else:
+            if tid in matched_tids:
+                continue
+
+            # New tracks are initialized with lost=0 above and should not be removed
+            # immediately. They age only when unmatched on subsequent updates.
+            if self.tracks[tid]['lost'] < self.max_lost:
                 self.tracks[tid]['lost'] += 1
+            else:
+                to_del.append(tid)
 
         for tid in to_del:
             del self.tracks[tid]
