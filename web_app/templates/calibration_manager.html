@@ -76,9 +76,140 @@
       overflow: auto;
     }
     .muted { color: #94a3b8; font-size: 12px; }
+
+    /* Auth Header Styles */
+    .auth-header {
+      position: sticky;
+      top: 0;
+      z-index: 1000;
+      background: linear-gradient(135deg, #0f172a, #1e293b);
+      border-bottom: 1px solid rgba(148, 163, 184, 0.2);
+      padding: 12px 20px;
+    }
+
+    .auth-container {
+      max-width: 1200px;
+      margin: 0 auto;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 20px;
+    }
+
+    .app-title {
+      font-size: 16px;
+      font-weight: 700;
+      color: #f8fafc;
+    }
+
+    .auth-buttons {
+      display: flex;
+      gap: 12px;
+      align-items: center;
+    }
+
+    .auth-link,
+    .auth-button {
+      text-decoration: none;
+      color: #f8fafc;
+      padding: 8px 14px;
+      border-radius: 6px;
+      font-size: 13px;
+      font-weight: 500;
+      border: 1px solid rgba(248, 250, 252, 0.2);
+      background: transparent;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    .auth-link:hover,
+    .auth-button:hover {
+      background: rgba(248, 250, 252, 0.1);
+      border-color: rgba(248, 250, 252, 0.4);
+    }
+
+    .auth-link.logout {
+      border-color: #ef4444;
+      color: #fecaca;
+    }
+
+    .auth-link.logout:hover {
+      background: rgba(239, 68, 68, 0.1);
+      border-color: #ef4444;
+    }
+
+    .user-info {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-right: 8px;
+      padding-right: 8px;
+      border-right: 1px solid rgba(248, 250, 252, 0.2);
+    }
+
+    .user-avatar {
+      width: 32px;
+      height: 32px;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #f8fafc;
+      font-weight: 700;
+      font-size: 12px;
+    }
+
+    .user-details {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+
+    .user-name {
+      color: #f8fafc;
+      font-size: 13px;
+      font-weight: 600;
+    }
+
+    .user-role {
+      color: rgba(248, 250, 252, 0.6);
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    @media (max-width: 600px) {
+      .auth-header {
+        padding: 10px 12px;
+      }
+      .auth-container {
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+      .app-title {
+        font-size: 14px;
+      }
+      .user-info {
+        margin-right: 0;
+        padding-right: 0;
+        border-right: none;
+        width: 100%;
+        justify-content: space-between;
+      }
+    }
   </style>
 </head>
 <body>
+  <nav class="auth-header">
+    <div class="auth-container">
+      <div class="app-title">🚦 Smart Traffic</div>
+      <div class="auth-buttons" id="authButtons">
+        <a href="/login" class="auth-link">Sign In</a>
+      </div>
+    </div>
+  </nav>
+
   <div class="wrap">
     <div class="nav">
       <a href="/">Inference</a>
@@ -251,6 +382,51 @@
       status.textContent = `Imported: ${data.camera_id}`;
       await loadProfiles();
     });
+
+    // Authentication header functions
+    async function checkAuthStatus() {
+      const authButtons = document.getElementById('authButtons');
+      if (!authButtons) return;
+      
+      try {
+        const response = await fetch('/api/user/profile', { credentials: 'include' });
+        if (response.ok) {
+          const user = await response.json();
+          updateAuthHeader(user);
+        } else {
+          updateAuthHeader(null);
+        }
+      } catch (err) {
+        console.error('Auth check failed:', err);
+        updateAuthHeader(null);
+      }
+    }
+
+    function updateAuthHeader(user) {
+      const authButtons = document.getElementById('authButtons');
+      if (!authButtons) return;
+      
+      if (user && user.username) {
+        const initials = user.username.substring(0, 2).toUpperCase();
+        const roleDisplay = user.role ? user.role.toUpperCase() : 'VIEWER';
+        
+        authButtons.innerHTML = `
+          <div class="user-info">
+            <div class="user-avatar">${initials}</div>
+            <div class="user-details">
+              <div class="user-name">${user.username}</div>
+              <div class="user-role">${roleDisplay}</div>
+            </div>
+          </div>
+          <a href="/logout" class="auth-link logout">Sign Out</a>
+        `;
+      } else {
+        authButtons.innerHTML = '<a href="/login" class="auth-link">Sign In</a>';
+      }
+    }
+
+    // Initialize auth check on page load
+    document.addEventListener('DOMContentLoaded', checkAuthStatus);
 
     loadProfiles();
     loadSummary();
