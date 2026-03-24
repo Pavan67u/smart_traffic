@@ -93,7 +93,7 @@
 
     <div class="card">
       <h2>Live Summary</h2>
-      <div id="summary" class="mono">Loading...</div>
+      <div id="summary" class="muted">Loading...</div>
     </div>
 
     <div class="card">
@@ -119,7 +119,7 @@
         <input id="export-camera-id" placeholder="camera_id" value="default">
         <button id="export-btn">Export</button>
       </div>
-      <div id="export-output" class="mono" style="margin-top:10px;">No export yet.</div>
+      <div id="export-output" class="muted" style="margin-top:10px;">No export yet.</div>
     </div>
 
     <div class="card">
@@ -128,7 +128,7 @@
         <input id="import-camera-id" placeholder="target camera_id">
         <label><input type="checkbox" id="import-overwrite"> Overwrite if exists</label>
       </div>
-      <textarea id="import-config" rows="8" style="width:100%; margin-top:8px;" placeholder='Paste JSON config object only, e.g. {"reference_resolution":[1280,720],...}'></textarea>
+      <textarea id="import-config" rows="8" style="width:100%; margin-top:8px;" placeholder="Paste preset configuration data"></textarea>
       <div class="row" style="margin-top:8px;">
         <button id="import-btn">Import Preset</button>
       </div>
@@ -157,7 +157,9 @@
       profilesBody.innerHTML = ids.map(id => {
         const p = profiles[id] || {};
         const rr = p.reference_resolution ? p.reference_resolution.join('x') : '-';
-        const ll = p.lane_line ? JSON.stringify(p.lane_line) : '-';
+        const ll = Array.isArray(p.lane_line) && p.lane_line.length === 2
+          ? `${(p.lane_line[0] || []).join(',')} -> ${(p.lane_line[1] || []).join(',')}`
+          : '-';
         return `<tr>
           <td><strong>${escapeHtml(id)}</strong></td>
           <td>${escapeHtml(p.description || id)}</td>
@@ -175,7 +177,12 @@
     async function loadSummary() {
       const res = await fetch('/api/metrics/summary');
       const data = await res.json();
-      summaryEl.textContent = JSON.stringify(data, null, 2);
+      summaryEl.innerHTML = [
+        `Total violations: <strong>${escapeHtml(data.total_violations ?? 0)}</strong>`,
+        `Last 24h: <strong>${escapeHtml(data.violations_last_24h ?? 0)}</strong>`,
+        `Runtime active runs: <strong>${escapeHtml(data.runtime?.active_runs ?? 0)}</strong>`,
+        `Runtime frames: <strong>${escapeHtml(data.runtime?.frames_processed ?? 0)}</strong>`,
+      ].join(' | ');
     }
 
     window.fillExport = function(id) {
@@ -202,7 +209,14 @@
         out.textContent = data.error || 'Export failed';
         return;
       }
-      out.textContent = JSON.stringify(data, null, 2);
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+      const href = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = href;
+      a.download = `${id || 'camera'}_preset.json`;
+      a.click();
+      URL.revokeObjectURL(href);
+      out.textContent = `Preset exported for '${id}' (file downloaded).`;
     });
 
     document.getElementById('import-btn').addEventListener('click', async () => {

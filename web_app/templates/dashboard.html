@@ -462,7 +462,7 @@
         <div class="chart-header">
           <strong>Model Drift Health</strong>
         </div>
-        <pre id="drift-health" style="margin:0; white-space:pre-wrap; font-size:12px; color:var(--muted); max-height:220px; overflow:auto;">Loading drift health...</pre>
+        <div id="drift-health" style="margin:0; font-size:12px; color:var(--muted); max-height:220px; overflow:auto;">Loading drift health...</div>
       </div>
       <table>
       <thead>
@@ -667,7 +667,15 @@
       fetch('/api/model/drift')
         .then(r => r.json())
         .then(d => {
-          el.textContent = JSON.stringify(d, null, 2);
+          const trend = d?.confidence_trend || {};
+          const fb = d?.fallback_tracking || {};
+          const topRun = Array.isArray(fb.runs) && fb.runs.length ? fb.runs[0] : null;
+          el.innerHTML = [
+            `<strong>Drift Risk</strong>: ${d?.drift_risk || '-'}`,
+            `<strong>Confidence Trend</strong>: ${trend.label || '-'} (delta ${Number(trend.delta || 0).toFixed(3)})`,
+            `<strong>Fallback Ratio</strong>: ${Number(fb.aggregate_ratio || 0).toFixed(3)}`,
+            topRun ? `<strong>Highest Fallback Run</strong>: ${topRun.run_id || '-'} @ ${Number(topRun.fallback_ratio || 0).toFixed(3)}` : '<strong>Highest Fallback Run</strong>: -',
+          ].join('<br>');
         })
         .catch(() => {
           el.textContent = 'Could not load drift health data';

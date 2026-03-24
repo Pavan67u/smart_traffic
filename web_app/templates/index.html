@@ -514,7 +514,7 @@
             {% endif %}
             {% endfor %}
           </select>
-          <div class="hint">Defines stop-line and lane boundaries. See <code>config/cameras.json</code>.</div>
+          <div class="hint">Defines stop-line and lane boundaries for violation detection.</div>
         </div>
 
         <div class="cards">
@@ -989,16 +989,16 @@
         <h4>Monitoring Diagnostics</h4>
       </div>
       <p class="hint" style="margin-top:0;">Live tracking metrics and scaled rule geometry for current camera/run.</p>
-      <pre id="diag-metrics" style="white-space:pre-wrap; font-size:12px; color:var(--muted); max-height:180px; overflow:auto;">Loading metrics...</pre>
-      <pre id="diag-rules" style="white-space:pre-wrap; font-size:12px; color:var(--muted); max-height:220px; overflow:auto;">Loading rule geometry...</pre>
+      <div id="diag-metrics" style="font-size:12px; color:var(--muted); max-height:180px; overflow:auto;">Loading metrics...</div>
+      <div id="diag-rules" style="font-size:12px; color:var(--muted); max-height:220px; overflow:auto; margin-top:8px;">Loading rule geometry...</div>
       <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:10px;">
         <button type="button" class="button" onclick="refreshSignalSuggestion()">Refresh Timing Suggestion</button>
         <button type="button" class="button" onclick="applySignalSuggestion()">Apply Suggestion (Timer Mode)</button>
         <button type="button" class="button" onclick="enableAutoSignalPolicy()">Enable Auto Policy</button>
         <button type="button" class="button" onclick="disableAutoSignalPolicy()">Disable Auto Policy</button>
       </div>
-      <pre id="diag-signal" style="white-space:pre-wrap; font-size:12px; color:var(--muted); max-height:220px; overflow:auto;">Loading signal suggestion...</pre>
-      <pre id="diag-auto-policy" style="white-space:pre-wrap; font-size:12px; color:var(--muted); max-height:180px; overflow:auto;">Loading auto-policy status...</pre>
+      <div id="diag-signal" style="font-size:12px; color:var(--muted); max-height:220px; overflow:auto; margin-top:8px;">Loading signal suggestion...</div>
+      <div id="diag-auto-policy" style="font-size:12px; color:var(--muted); max-height:180px; overflow:auto; margin-top:8px;">Loading auto-policy status...</div>
     </div>
     <script>
       // Fetch and display recent violations
@@ -1016,6 +1016,71 @@
           const result = params.get('result') || '';
           const m = result.match(/(run_[a-zA-Z0-9]+)/);
           return m ? m[1] : null;
+        }
+
+        function esc(v) {
+          return String(v ?? '-')
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#039;');
+        }
+
+        function metricSummaryHtml(d) {
+          if (!d || typeof d !== 'object') return 'Metrics unavailable';
+          const frames = d.frames_processed ?? 0;
+          const det = d.detections_seen ?? 0;
+          const tracks = d.tracks_emitted ?? 0;
+          const viol = d.violations_emitted ?? 0;
+          const ext = d.frames_with_external_tracks ?? 0;
+          const fb = d.frames_with_fallback_tracks ?? 0;
+          return [
+            `<strong>Frames</strong>: ${esc(frames)}`,
+            `<strong>Detections</strong>: ${esc(det)} | <strong>Tracks</strong>: ${esc(tracks)} | <strong>Violations</strong>: ${esc(viol)}`,
+            `<strong>Tracking Source</strong>: External ${esc(ext)} / Fallback ${esc(fb)}`,
+          ].join('<br>');
+        }
+
+        function rulesSummaryHtml(d) {
+          if (!d || typeof d !== 'object') return 'Rule geometry unavailable';
+          const cam = d.camera_id || 'default';
+          const fs = Array.isArray(d.frame_size) ? `${d.frame_size[0]}x${d.frame_size[1]}` : '-';
+          const stopPts = Array.isArray(d.stop_zone) ? d.stop_zone.length : 0;
+          const lane = Array.isArray(d.lane_line) ? `${d.lane_line[0]?.join(',')} -> ${d.lane_line[1]?.join(',')}` : 'Not configured';
+          return [
+            `<strong>Camera</strong>: ${esc(cam)} | <strong>Frame</strong>: ${esc(fs)}`,
+            `<strong>Stop Zone Points</strong>: ${esc(stopPts)}`,
+            `<strong>Lane Line</strong>: ${esc(lane)}`,
+          ].join('<br>');
+        }
+
+        function signalSummaryHtml(d) {
+          const s = d && d.suggestion ? d.suggestion : d;
+          if (!s || typeof s !== 'object') return 'Signal suggestion unavailable';
+          const dur = s.durations || {};
+          const peak = s.peak_hour && s.peak_hour.is_peak_hour ? 'Peak hour profile' : 'Normal hour profile';
+          const hold = s.stability || {};
+          return [
+            `<strong>Profile</strong>: ${esc(s.profile || '-')}`,
+            `<strong>Durations</strong>: RED ${esc(dur.RED)}s, GREEN ${esc(dur.GREEN)}s, YELLOW ${esc(dur.YELLOW)}s`,
+            `<strong>Confidence</strong>: ${esc(s.confidence || '-')}, <strong>Mode</strong>: ${esc(s.recommended_mode || '-')}`,
+            `<strong>Stability</strong>: ${esc(peak)} | Hold active: ${esc(hold.hold_active || false)}`,
+          ].join('<br>');
+        }
+
+        function autoPolicySummaryHtml(d, cameraId) {
+          if (!d || typeof d !== 'object') return 'Auto policy unavailable';
+          const policies = d.policies || {};
+          const p = policies[cameraId] || null;
+          if (!p) {
+            return `<strong>Auto Policy</strong>: Not enabled for camera ${esc(cameraId)}.`;
+          }
+          return [
+            `<strong>Auto Policy</strong>: ${p.enabled ? 'Enabled' : 'Disabled'} for ${esc(cameraId)}`,
+            `<strong>Interval</strong>: ${esc(p.interval_seconds)}s | <strong>Mode</strong>: ${esc(p.mode || '-')}`,
+            `<strong>Last Applied</strong>: ${esc(p.last_applied || 'Not yet')}`,
+          ].join('<br>');
         }
         function renderCharts(data) {
           const typeChart = document.getElementById('chart-type');
@@ -1165,7 +1230,7 @@
           fetch(metricsUrl)
             .then(r => r.json())
             .then(d => {
-              metricsEl.textContent = JSON.stringify(d, null, 2);
+              metricsEl.innerHTML = metricSummaryHtml(d);
             })
             .catch(() => {
               metricsEl.textContent = 'Could not load metrics';
@@ -1175,7 +1240,7 @@
           fetch(rulesUrl)
             .then(r => r.json())
             .then(d => {
-              rulesEl.textContent = JSON.stringify(d, null, 2);
+              rulesEl.innerHTML = rulesSummaryHtml(d);
             })
             .catch(() => {
               rulesEl.textContent = 'Could not load rule geometry';
@@ -1187,7 +1252,7 @@
           fetch(signalUrl)
             .then(r => r.json())
             .then(d => {
-              signalEl.textContent = JSON.stringify(d, null, 2);
+              signalEl.innerHTML = signalSummaryHtml(d);
             })
             .catch(() => {
               signalEl.textContent = 'Could not load signal suggestion';
@@ -1196,7 +1261,7 @@
           fetch('/api/signal/auto_policy')
             .then(r => r.json())
             .then(d => {
-              autoPolicyEl.textContent = JSON.stringify(d, null, 2);
+              autoPolicyEl.innerHTML = autoPolicySummaryHtml(d, cameraId);
             })
             .catch(() => {
               autoPolicyEl.textContent = 'Could not load auto-policy status';
@@ -1221,7 +1286,7 @@
           })
             .then(r => r.json())
             .then(d => {
-              signalEl.textContent = JSON.stringify(d, null, 2);
+              signalEl.innerHTML = signalSummaryHtml(d);
               setTimeout(loadDiagnostics, 500);
             })
             .catch(() => {
@@ -1245,7 +1310,7 @@
           })
             .then(r => r.json())
             .then(d => {
-              autoPolicyEl.textContent = JSON.stringify(d, null, 2);
+              autoPolicyEl.innerHTML = autoPolicySummaryHtml({ policies: { [cameraId]: d.policy } }, cameraId);
               setTimeout(loadDiagnostics, 500);
             })
             .catch(() => {
@@ -1265,7 +1330,7 @@
           })
             .then(r => r.json())
             .then(d => {
-              autoPolicyEl.textContent = JSON.stringify(d, null, 2);
+              autoPolicyEl.innerHTML = autoPolicySummaryHtml({ policies: { [cameraId]: d.policy } }, cameraId);
               setTimeout(loadDiagnostics, 500);
             })
             .catch(() => {
