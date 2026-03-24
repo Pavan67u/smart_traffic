@@ -1,6 +1,60 @@
 # Smart Traffic Project: Complete Technical Explanation
 
-Last updated: 23 March 2026
+Last updated: 24 March 2026
+
+## Progress Status
+
+**All 28 core features fully implemented and deployed.**
+
+### Recent Completions (24 March 2026)
+
+✅ **Commit 7018027** — Frontend UI cleanup (removes all raw JSON/code visibility)
+- Replaced all `<pre>` JSON dump blocks with human-readable `<div>` summaries
+- Added formatted output helpers: `metricSummaryHtml()`, `rulesSummaryHtml()`, `signalSummaryHtml()`, `autoPolicySummaryHtml()`
+- Changed export behavior to auto-download preset files instead of displaying JSON inline
+- Updated `/dashboard` drift-health panel to show "Drift Risk | Confidence Trend | Fallback Ratio" instead of raw JSON
+- Impact: 3 templates updated, 107 insertions, 20 deletions
+
+✅ **Commit 77b9833** — Batch feature implementation (all 6 remaining features)
+1. Auto-policy loop daemon for periodic signal suggestions per camera
+2. Peak-hour weighting (1.15-1.20x boost during rush hours: 7-10 AM, 5-9 PM UTC)
+3. Alert hooks (webhook + SMTP email) with 180s cooldown throttling
+4. Incident priority scoring (0-100 scale) ranking violations by severity
+5. Model drift health API tracking confidence trends and fallback ratio
+6. Dashboard integration with priority-based violation sorting
+
+✅ **Commit ca3a62d** — Signal policy expansion
+- EWMA-smoothed signal timing suggestions (alpha=0.35)
+- 45-second anti-flap hold window preventing rapid profile changes
+- Peak-hour adaptive weighting integrated into suggestion algorithm
+
+### Feature Implementation Summary
+
+**Backend APIs** (22):
+- Inference and detection (3)
+- Tracking and rules (4)
+- Database and persistence (3)
+- Signal management (4)
+- Alerts and notifications (3)
+- Model health monitoring (2)
+- Metrics and diagnostics (3)
+
+**Frontend UI** (6):
+- Inference page with camera selection and stream support
+- Dashboard with status workflow and violation table
+- Evidence carousel modal with zoom
+- Charts (no external libs) with PNG export
+- Dark mode toggle with persistence
+- Calibration manager for camera profiles
+
+### System State
+- App running on port 5050 with full REST API
+- SQLite violation database with 7 core fields + priority scoring
+- YOLOv8n baseline + fine-tuning support for vehicle detection
+- Production-ready UI (no visible raw code/JSON to end users)
+- All diagnostics converted to human-readable summaries
+
+---
 
 ## 1. What This Project Is
 
