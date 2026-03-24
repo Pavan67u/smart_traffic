@@ -275,6 +275,31 @@
       color: #0369a1;
     }
 
+    .priority-high,
+    .priority-medium,
+    .priority-low {
+      font-weight: 700;
+      padding: 4px 8px;
+      border-radius: 999px;
+      font-size: 0.75rem;
+      display: inline-block;
+    }
+
+    .priority-high {
+      background: #fee2e2;
+      color: #991b1b;
+    }
+
+    .priority-medium {
+      background: #fef3c7;
+      color: #92400e;
+    }
+
+    .priority-low {
+      background: #dcfce7;
+      color: #166534;
+    }
+
     .thumb {
       width: 84px;
       height: 56px;
@@ -433,6 +458,12 @@
         </div>
         <div class="bar"><span>Loading...</span><div class="track"><div class="fill" style="width:0"></div></div><strong></strong></div>
       </div>
+      <div class="chart" id="drift-health-panel">
+        <div class="chart-header">
+          <strong>Model Drift Health</strong>
+        </div>
+        <pre id="drift-health" style="margin:0; white-space:pre-wrap; font-size:12px; color:var(--muted); max-height:220px; overflow:auto;">Loading drift health...</pre>
+      </div>
       <table>
       <thead>
         <tr>
@@ -443,6 +474,7 @@
           <th>Track ID</th>
           <th>Vehicle</th>
           <th>Evidence</th>
+          <th>Priority</th>
           <th>Status</th>
           <th>Actions</th>
         </tr>
@@ -462,6 +494,9 @@
             {% else %}
             <span style="color: #999;">No Image</span>
             {% endif %}
+          </td>
+          <td>
+            <span class="priority-{{ v.priority_level }}">{{ v.priority_level|upper }} · {{ v.priority_score }}</span>
           </td>
           <td>
             <span class="status-{{ v.status|lower }}">{{ v.status }}</span>
@@ -484,7 +519,7 @@
         </tr>
         {% else %}
         <tr>
-          <td colspan="9" style="text-align:center; color: #777;">No violations recorded.</td>
+          <td colspan="10" style="text-align:center; color: #777;">No violations recorded.</td>
         </tr>
         {% endfor %}
       </tbody>
@@ -553,7 +588,7 @@
       let total = 0, newCount = 0, reviewed = 0, sent = 0;
       const typeCounts = {};
       rows.forEach(r => {
-        const status = r.querySelector('td:nth-child(8) span');
+        const status = r.querySelector('td:nth-child(9) span');
         const type = r.querySelector('td:nth-child(3)');
         if (!status || !type) return;
         total += 1;
@@ -627,6 +662,18 @@
       updateStats();
     }
 
+    function loadDriftHealth() {
+      const el = document.getElementById('drift-health');
+      fetch('/api/model/drift')
+        .then(r => r.json())
+        .then(d => {
+          el.textContent = JSON.stringify(d, null, 2);
+        })
+        .catch(() => {
+          el.textContent = 'Could not load drift health data';
+        });
+    }
+
     function setupAutoRefresh() {
       const toggle = document.getElementById('autoRefresh');
       const saved = localStorage.getItem('auto_refresh');
@@ -685,7 +732,9 @@
 
     populateFilters();
     updateStats();
+    loadDriftHealth();
     setupAutoRefresh();
+    setInterval(loadDriftHealth, 8000);
     document.getElementById('filter-type').addEventListener('change', applyFilters);
     document.getElementById('filter-vehicle').addEventListener('change', applyFilters);
     document.getElementById('filter-start').addEventListener('change', applyFilters);

@@ -2,12 +2,15 @@ from flask import Flask, render_template, request, send_from_directory, redirect
 from pathlib import Path
 import uuid
 import os
+import urllib.request
 import cv2  # type: ignore
 import numpy as np
 import json
 import io
 import csv
+import smtplib
 from fpdf import FPDF  # type: ignore
+from email.message import EmailMessage
 from web_app.models import db, Violation
 from typing import Any, Optional
 import threading
@@ -116,6 +119,192 @@ SIGNAL_POLICY_SMOOTHING_ALPHA = float(os.environ.get('SIGNAL_POLICY_SMOOTHING_AL
 SIGNAL_POLICY_HOLD_SECONDS = int(os.environ.get('SIGNAL_POLICY_HOLD_SECONDS', '45'))
 SIGNAL_POLICY_STATE = {}
 SIGNAL_POLICY_LOCK = threading.Lock()
+
+ALERT_WEBHOOK_URL = os.environ.get('ALERT_WEBHOOK_URL', '').strip()
+ALERT_COOLDOWN_SECONDS = int(os.environ.get('ALERT_COOLDOWN_SECONDS', '180'))
+ALERT_STATE = {}
+
+ALERT_SMTP_HOST = os.environ.get('ALERT_SMTP_HOST', '').strip()
+ALERT_SMTP_PORT = int(os.environ.get('ALERT_SMTP_PORT', '587'))
+ALERT_SMTP_USER = os.environ.get('ALERT_SMTP_USER', '').strip()
+ALERT_SMTP_PASS = os.environ.get('ALERT_SMTP_PASS', '').strip()
+ALERT_EMAIL_TO = os.environ.get('ALERT_EMAIL_TO', '').strip()
+ALERT_EMAIL_FROM = os.environ.get('ALERT_EMAIL_FROM', ALERT_SMTP_USER).strip()
+
+AUTO_POLICY_DEFAULT_INTERVAL = int(os.environ.get('AUTO_POLICY_DEFAULT_INTERVAL', '20'))
+AUTO_POLICY_STATE = {}
+AUTO_POLICY_LOCK = threading.Lock()
+AUTO_POLICY_STOP_EVENT = threading.Event()
+AUTO_POLICY_THREAD = None
+
+
+def _priority_score(violation):
+    vtype = (violation.violation_type or '').lower()
+    status = (violation.status or '').lower()
+    vehicle = (violation.vehicle_type or '').lower()
+
+    base = 35
+    if 'red' in vtype:
+        base = 72
+    elif 'stop' in vtype:
+        base = 58
+    elif 'lane' in vtype:
+        base = 45
+
+    status_bonus = {'new': 15, 'reviewed': 6, 'sent': 0}.get(status, 0)
+    conf = float(violation.confidence or 0.0)
+    conf_bonus = int(max(0.0, min(conf, 1.0)) * 15)
+    vehicle_bonus = 6 if vehicle in {'bus', 'truck'} else 0
+
+    recency_bonus = 0
+    try:
+        age_s = max(0.0, time.time() - violation.timestamp.timestamp())
+        recency_bonus = max(0, int(20 - (age_s / 3600.0)))
+    except Exception:
+        recency_bonus = 0
+
+    score = max(0, min(100, base + status_bonus + conf_bonus + vehicle_bonus + recency_bonus))
+    if score >= 75:
+        level = 'high'
+    elif score >= 50:
+        level = 'medium'
+    else:
+        level = 'low'
+    return score, level
+
+
+def _peak_hour_weight(now_ts=None):
+    lt = time.localtime(now_ts or time.time())
+    # Typical city peaks: morning and evening rush.
+    is_peak = (7 <= lt.tm_hour <= 10) or (17 <= lt.tm_hour <= 21)
+    if is_peak:
+        return {
+            'is_peak_hour': True,
+            'tracks_weight': 1.15,
+            'violation_weight': 1.20,
+            'tag': 'rush_hour',
+        }
+    return {
+        'is_peak_hour': False,
+        'tracks_weight': 1.0,
+        'violation_weight': 1.0,
+        'tag': 'normal_hour',
+    }
+
+
+def _should_send_alert(key):
+    now_ts = time.time()
+    last = float(ALERT_STATE.get(key, 0.0))
+    if now_ts - last < ALERT_COOLDOWN_SECONDS:
+        return False
+    ALERT_STATE[key] = now_ts
+    return True
+
+
+def _send_webhook_alert(payload):
+    if not ALERT_WEBHOOK_URL:
+        return {'sent': False, 'reason': 'webhook_not_configured'}
+    try:
+        req = urllib.request.Request(
+            ALERT_WEBHOOK_URL,
+            data=json.dumps(payload).encode('utf-8'),
+            headers={'Content-Type': 'application/json'},
+            method='POST',
+        )
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            return {'sent': True, 'status_code': getattr(resp, 'status', 200)}
+    except Exception as e:
+        return {'sent': False, 'reason': str(e)}
+
+
+def _send_email_alert(subject, payload):
+    if not (ALERT_SMTP_HOST and ALERT_EMAIL_TO and ALERT_EMAIL_FROM):
+        return {'sent': False, 'reason': 'email_not_configured'}
+    try:
+        msg = EmailMessage()
+        msg['Subject'] = subject
+        msg['From'] = ALERT_EMAIL_FROM
+        msg['To'] = ALERT_EMAIL_TO
+        msg.set_content(json.dumps(payload, indent=2))
+
+        with smtplib.SMTP(ALERT_SMTP_HOST, ALERT_SMTP_PORT, timeout=8) as s:
+            s.starttls()
+            if ALERT_SMTP_USER and ALERT_SMTP_PASS:
+                s.login(ALERT_SMTP_USER, ALERT_SMTP_PASS)
+            s.send_message(msg)
+        return {'sent': True}
+    except Exception as e:
+        return {'sent': False, 'reason': str(e)}
+
+
+def _emit_alerts(scope_key, payload):
+    if not _should_send_alert(scope_key):
+        return {'suppressed': True, 'cooldown_seconds': ALERT_COOLDOWN_SECONDS}
+    wh = _send_webhook_alert(payload)
+    em = _send_email_alert('Smart Traffic Incident Alert', payload)
+    return {'suppressed': False, 'webhook': wh, 'email': em}
+
+
+def _ensure_auto_policy_thread():
+    global AUTO_POLICY_THREAD
+    if AUTO_POLICY_THREAD is not None and AUTO_POLICY_THREAD.is_alive():
+        return
+
+    def _loop():
+        while not AUTO_POLICY_STOP_EVENT.is_set():
+            try:
+                with AUTO_POLICY_LOCK:
+                    items = [(k, dict(v)) for k, v in AUTO_POLICY_STATE.items() if v.get('enabled')]
+
+                now_ts = time.time()
+                for camera_id, cfg in items:
+                    interval = max(5, int(cfg.get('interval_seconds', AUTO_POLICY_DEFAULT_INTERVAL)))
+                    last_applied = float(cfg.get('last_applied_ts', 0.0))
+                    if now_ts - last_applied < interval:
+                        continue
+
+                    run_id = cfg.get('run_id')
+                    mode = (cfg.get('mode') or 'timer').strip().lower()
+                    force_change = bool(cfg.get('force', False))
+
+                    metrics = _aggregate_runtime_metrics(run_id=run_id, camera_id=camera_id)
+                    scope_key = f"{camera_id or 'global'}::{run_id or 'all'}"
+                    suggestion = _build_signal_timing_suggestion(metrics, scope_key=scope_key, force_profile_change=force_change)
+
+                    if SIGNAL_MANAGER:
+                        SIGNAL_MANAGER.set_durations(
+                            red=suggestion.get('durations', {}).get('RED'),
+                            green=suggestion.get('durations', {}).get('GREEN'),
+                            yellow=suggestion.get('durations', {}).get('YELLOW'),
+                        )
+                        if mode in {'manual', 'timer'}:
+                            SIGNAL_MANAGER.set_mode(mode)
+
+                    vrate = float(suggestion.get('derived', {}).get('violation_rate_ewma', 0.0) or 0.0)
+                    if suggestion.get('profile') == 'high_congestion' or vrate >= 0.06:
+                        payload = {
+                            'event': 'high_incident_risk',
+                            'camera_id': camera_id,
+                            'run_id': run_id,
+                            'suggestion': suggestion,
+                            'signal': SIGNAL_MANAGER.get_status() if SIGNAL_MANAGER else None,
+                            'timestamp': time.strftime('%Y-%m-%dT%H:%M:%S', time.localtime()),
+                        }
+                        _emit_alerts(f"{scope_key}:incident", payload)
+
+                    with AUTO_POLICY_LOCK:
+                        cur = AUTO_POLICY_STATE.get(camera_id, {})
+                        cur['last_applied_ts'] = now_ts
+                        cur['last_applied'] = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(now_ts))
+                        cur['last_suggestion'] = suggestion
+                        AUTO_POLICY_STATE[camera_id] = cur
+            except Exception as e:
+                print(f"[auto_policy] loop error: {e}")
+
+            AUTO_POLICY_STOP_EVENT.wait(1.0)
+
+    AUTO_POLICY_THREAD = threading.Thread(target=_loop, daemon=True)
+    AUTO_POLICY_THREAD.start()
 
 
 def draw_rule_overlay(frame, camera_id='default'):
@@ -558,6 +747,11 @@ def predict_video():
 def dashboard():
     # Fetch all violations ordered by latest first
     violations = Violation.query.order_by(Violation.timestamp.desc()).all()
+    for v in violations:
+        score, level = _priority_score(v)
+        v.priority_score = score
+        v.priority_level = level
+    violations.sort(key=lambda x: (getattr(x, 'priority_score', 0), x.timestamp.timestamp() if x.timestamp else 0), reverse=True)
     return render_template('dashboard.html', violations=violations)
 
 
@@ -661,6 +855,7 @@ def api_recent_violations():
     violations = Violation.query.order_by(Violation.timestamp.desc()).limit(10).all()
     result = []
     for v in violations:
+        score, level = _priority_score(v)
         result.append({
             'id': v.id,
             'timestamp': v.timestamp.strftime('%Y-%m-%d %H:%M:%S'),
@@ -669,7 +864,9 @@ def api_recent_violations():
             'confidence': f"{v.confidence:.2f}" if v.confidence else None,
             'track_id': v.track_id,
             'status': v.status,
-            'image_path': v.image_path
+            'image_path': v.image_path,
+            'priority_score': score,
+            'priority_level': level,
         })
     return jsonify(result)
 
@@ -803,28 +1000,32 @@ def _build_signal_timing_suggestion(metrics, scope_key='global', force_profile_c
     avg_tracks_raw = float(metrics.get('tracks_emitted', 0) or 0) / frames
     violation_rate_raw = float(metrics.get('violations_emitted', 0) or 0) / frames
     fallback_ratio = float(metrics.get('frames_with_fallback_tracks', 0) or 0) / frames
+    peak_cfg = _peak_hour_weight()
+
+    avg_tracks_raw_weighted = avg_tracks_raw * float(peak_cfg['tracks_weight'])
+    violation_rate_raw_weighted = violation_rate_raw * float(peak_cfg['violation_weight'])
 
     alpha = min(max(SIGNAL_POLICY_SMOOTHING_ALPHA, 0.05), 1.0)
     now_ts = time.time()
 
     with SIGNAL_POLICY_LOCK:
         prev = SIGNAL_POLICY_STATE.get(scope_key, {})
-        prev_avg = float(prev.get('ewma_avg_tracks', avg_tracks_raw))
-        prev_vrate = float(prev.get('ewma_violation_rate', violation_rate_raw))
+        prev_avg = float(prev.get('ewma_avg_tracks', avg_tracks_raw_weighted))
+        prev_vrate = float(prev.get('ewma_violation_rate', violation_rate_raw_weighted))
 
-        avg_tracks = (alpha * avg_tracks_raw) + ((1.0 - alpha) * prev_avg)
-        violation_rate = (alpha * violation_rate_raw) + ((1.0 - alpha) * prev_vrate)
+        avg_tracks = (alpha * avg_tracks_raw_weighted) + ((1.0 - alpha) * prev_avg)
+        violation_rate = (alpha * violation_rate_raw_weighted) + ((1.0 - alpha) * prev_vrate)
 
         # Choose candidate profile from smoothed metrics.
         if avg_tracks >= 6.0 or violation_rate >= 0.08:
             candidate_profile = 'high_congestion'
-            candidate_durations = {'RED': 8, 'GREEN': 20, 'YELLOW': 3}
+            candidate_durations = {'RED': 7, 'GREEN': 22, 'YELLOW': 3} if peak_cfg['is_peak_hour'] else {'RED': 8, 'GREEN': 20, 'YELLOW': 3}
         elif avg_tracks >= 3.0 or violation_rate >= 0.03:
             candidate_profile = 'medium_congestion'
-            candidate_durations = {'RED': 10, 'GREEN': 15, 'YELLOW': 3}
+            candidate_durations = {'RED': 9, 'GREEN': 17, 'YELLOW': 3} if peak_cfg['is_peak_hour'] else {'RED': 10, 'GREEN': 15, 'YELLOW': 3}
         else:
             candidate_profile = 'low_congestion'
-            candidate_durations = {'RED': 14, 'GREEN': 10, 'YELLOW': 3}
+            candidate_durations = {'RED': 12, 'GREEN': 12, 'YELLOW': 3} if peak_cfg['is_peak_hour'] else {'RED': 14, 'GREEN': 10, 'YELLOW': 3}
 
         last_profile = prev.get('profile')
         last_change_ts = float(prev.get('last_change_ts', 0.0))
@@ -860,8 +1061,10 @@ def _build_signal_timing_suggestion(metrics, scope_key='global', force_profile_c
 
     rationale = [
         f"avg_tracks_per_frame_raw={avg_tracks_raw:.2f}",
+        f"avg_tracks_per_frame_raw_weighted={avg_tracks_raw_weighted:.2f}",
         f"avg_tracks_per_frame_ewma={avg_tracks:.2f}",
         f"violation_rate_raw={violation_rate_raw:.3f}",
+        f"violation_rate_raw_weighted={violation_rate_raw_weighted:.3f}",
         f"violation_rate_ewma={violation_rate:.3f}",
         f"fallback_ratio={fallback_ratio:.2f}",
         f"sample_frames={frames}",
@@ -878,6 +1081,12 @@ def _build_signal_timing_suggestion(metrics, scope_key='global', force_profile_c
             'hold_seconds': SIGNAL_POLICY_HOLD_SECONDS,
             'hold_active': hold_active,
             'hold_remaining_seconds': hold_remaining_seconds,
+        },
+        'peak_hour': peak_cfg,
+        'derived': {
+            'avg_tracks_ewma': avg_tracks,
+            'violation_rate_ewma': violation_rate,
+            'fallback_ratio': fallback_ratio,
         },
         'metrics_used': {
             'frames_processed': frames,
@@ -936,6 +1145,113 @@ def apply_signal_suggestion():
         'ok': True,
         'applied': suggestion,
         'signal': SIGNAL_MANAGER.get_status(),
+    })
+
+
+@app.route('/api/signal/auto_policy', methods=['GET', 'POST'])
+def auto_policy():
+    _ensure_auto_policy_thread()
+
+    if request.method == 'POST':
+        data = request.json or {}
+        camera_id = (data.get('camera_id') or 'default').strip()
+        enabled = bool(data.get('enabled', True))
+        interval_seconds = max(5, int(data.get('interval_seconds', AUTO_POLICY_DEFAULT_INTERVAL)))
+        run_id = data.get('run_id')
+        mode = (data.get('mode') or 'timer').strip().lower()
+        force = bool(data.get('force', False))
+
+        with AUTO_POLICY_LOCK:
+            cur = AUTO_POLICY_STATE.get(camera_id, {})
+            cur.update({
+                'camera_id': camera_id,
+                'enabled': enabled,
+                'interval_seconds': interval_seconds,
+                'run_id': run_id,
+                'mode': mode if mode in {'manual', 'timer'} else 'timer',
+                'force': force,
+                'updated_at': time.strftime('%Y-%m-%d %H:%M:%S', time.localtime()),
+            })
+            AUTO_POLICY_STATE[camera_id] = cur
+
+        return jsonify({'ok': True, 'policy': dict(AUTO_POLICY_STATE.get(camera_id, {}))})
+
+    with AUTO_POLICY_LOCK:
+        policies = {k: dict(v) for k, v in AUTO_POLICY_STATE.items()}
+    return jsonify({
+        'thread_alive': bool(AUTO_POLICY_THREAD and AUTO_POLICY_THREAD.is_alive()),
+        'policies': policies,
+    })
+
+
+@app.route('/api/model/drift')
+def model_drift_health():
+    rows = Violation.query.order_by(Violation.timestamp.desc()).limit(120).all()
+    rows = list(reversed(rows))
+    conf_points = [float(v.confidence) for v in rows if v.confidence is not None]
+
+    conf_trend = 'stable'
+    confidence_delta = 0.0
+    if len(conf_points) >= 8:
+        mid = len(conf_points) // 2
+        first_avg = sum(conf_points[:mid]) / max(1, len(conf_points[:mid]))
+        second_avg = sum(conf_points[mid:]) / max(1, len(conf_points[mid:]))
+        confidence_delta = second_avg - first_avg
+        if confidence_delta <= -0.08:
+            conf_trend = 'degrading'
+        elif confidence_delta >= 0.05:
+            conf_trend = 'improving'
+
+    confidence_series = [
+        {
+            'timestamp': v.timestamp.strftime('%Y-%m-%d %H:%M:%S'),
+            'confidence': float(v.confidence),
+        }
+        for v in rows if v.confidence is not None
+    ][-20:]
+
+    runtime = get_runtime_metrics() if get_runtime_metrics is not None else {}
+    fallback_by_run = []
+    agg_frames = 0
+    agg_fallback = 0
+    if isinstance(runtime, dict):
+        for k, m in runtime.items():
+            if not isinstance(m, dict):
+                continue
+            frames = int(m.get('frames_processed', 0) or 0)
+            fb = int(m.get('frames_with_fallback_tracks', 0) or 0)
+            agg_frames += frames
+            agg_fallback += fb
+            ratio = (fb / frames) if frames > 0 else 0.0
+            run_id, camera_id = (k.split(':', 1) + [''])[:2]
+            fallback_by_run.append({
+                'key': k,
+                'run_id': run_id,
+                'camera_id': camera_id,
+                'fallback_ratio': round(ratio, 4),
+                'frames_processed': frames,
+            })
+
+    fallback_by_run.sort(key=lambda x: x['fallback_ratio'], reverse=True)
+    aggregate_ratio = (agg_fallback / agg_frames) if agg_frames > 0 else 0.0
+    drift_risk = 'low'
+    if conf_trend == 'degrading' or aggregate_ratio > 0.6:
+        drift_risk = 'high'
+    elif aggregate_ratio > 0.35:
+        drift_risk = 'medium'
+
+    return jsonify({
+        'drift_risk': drift_risk,
+        'confidence_trend': {
+            'label': conf_trend,
+            'delta': round(confidence_delta, 4),
+            'sample_count': len(conf_points),
+            'series': confidence_series,
+        },
+        'fallback_tracking': {
+            'aggregate_ratio': round(aggregate_ratio, 4),
+            'runs': fallback_by_run[:20],
+        },
     })
 
 @app.route('/api/health')

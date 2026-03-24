@@ -994,8 +994,11 @@
       <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:10px;">
         <button type="button" class="button" onclick="refreshSignalSuggestion()">Refresh Timing Suggestion</button>
         <button type="button" class="button" onclick="applySignalSuggestion()">Apply Suggestion (Timer Mode)</button>
+        <button type="button" class="button" onclick="enableAutoSignalPolicy()">Enable Auto Policy</button>
+        <button type="button" class="button" onclick="disableAutoSignalPolicy()">Disable Auto Policy</button>
       </div>
       <pre id="diag-signal" style="white-space:pre-wrap; font-size:12px; color:var(--muted); max-height:220px; overflow:auto;">Loading signal suggestion...</pre>
+      <pre id="diag-auto-policy" style="white-space:pre-wrap; font-size:12px; color:var(--muted); max-height:180px; overflow:auto;">Loading auto-policy status...</pre>
     </div>
     <script>
       // Fetch and display recent violations
@@ -1006,6 +1009,7 @@
         const metricsEl = document.getElementById('diag-metrics');
         const rulesEl = document.getElementById('diag-rules');
         const signalEl = document.getElementById('diag-signal');
+        const autoPolicyEl = document.getElementById('diag-auto-policy');
 
         function currentRunId() {
           const params = new URLSearchParams(window.location.search);
@@ -1188,6 +1192,15 @@
             .catch(() => {
               signalEl.textContent = 'Could not load signal suggestion';
             });
+
+          fetch('/api/signal/auto_policy')
+            .then(r => r.json())
+            .then(d => {
+              autoPolicyEl.textContent = JSON.stringify(d, null, 2);
+            })
+            .catch(() => {
+              autoPolicyEl.textContent = 'Could not load auto-policy status';
+            });
         }
 
         window.refreshSignalSuggestion = function() {
@@ -1213,6 +1226,50 @@
             })
             .catch(() => {
               signalEl.textContent = 'Could not apply signal suggestion';
+            });
+        }
+
+        window.enableAutoSignalPolicy = function() {
+          const cameraId = document.getElementById('camera_select')?.value || 'default';
+          const runId = currentRunId();
+          fetch('/api/signal/auto_policy', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              camera_id: cameraId,
+              run_id: runId,
+              enabled: true,
+              interval_seconds: 20,
+              mode: 'timer',
+            }),
+          })
+            .then(r => r.json())
+            .then(d => {
+              autoPolicyEl.textContent = JSON.stringify(d, null, 2);
+              setTimeout(loadDiagnostics, 500);
+            })
+            .catch(() => {
+              autoPolicyEl.textContent = 'Could not enable auto-policy';
+            });
+        }
+
+        window.disableAutoSignalPolicy = function() {
+          const cameraId = document.getElementById('camera_select')?.value || 'default';
+          fetch('/api/signal/auto_policy', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              camera_id: cameraId,
+              enabled: false,
+            }),
+          })
+            .then(r => r.json())
+            .then(d => {
+              autoPolicyEl.textContent = JSON.stringify(d, null, 2);
+              setTimeout(loadDiagnostics, 500);
+            })
+            .catch(() => {
+              autoPolicyEl.textContent = 'Could not disable auto-policy';
             });
         }
 
