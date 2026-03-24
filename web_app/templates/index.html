@@ -1,74 +1,808 @@
 <!doctype html>
 <html lang="en">
-  <head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Smart Traffic - Inference</title>
-    <style>
-      body { font-family: Arial, sans-serif; margin: 40px; }
-      .preview { margin-top: 20px; }
-    </style>
-  </head>
-  <body>
-    <h1>Upload an image for inference</h1>
-    <form action="/predict" method="post" enctype="multipart/form-data">
-      <input type="file" name="file" accept="image/*" required>
-      <button type="submit">Upload & Predict</button>
-    </form>
 
-    {% if request.args.get('result') or img_url %}
-    <div class="preview">
-      <h2>Result</h2>
-      {% set result_param = request.args.get('result') %}
-      {% if result_param %}
-        {# compute static path for the image #}
-        {% set img_url = '/static/' + result_param %}
-      {% endif %}
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Smart Traffic - Inference</title>
+  <style>
+    :root {
+      --bg: #0f172a;
+      --panel: #111827;
+      --panel-light: #1f2937;
+      --card: #ffffff;
+      --accent: #38bdf8;
+      --accent-strong: #0ea5e9;
+      --success: #22c55e;
+      --danger: #ef4444;
+      --warning: #f59e0b;
+      --text: #0f172a;
+      --muted: #64748b;
+      --border: #e2e8f0;
+      --shadow: 0 18px 50px rgba(15, 23, 42, 0.2);
+    }
 
-      {% if img_url and img_url != '' %}
-        {% set run_dir = img_url.rsplit('/', 1)[0] %}
-        {# compute class counts server-side by reading labels on refresh; template will show placeholder while JS polls #}
-        <p id="classCounts">Loading results...</p>
-        <img id="result-img" src="{{ img_url }}" alt="result image" style="max-width:800px; display:block; margin-top:10px;">
-        <script>
-        // Auto-reload the image until it successfully loads (cache-busted)
-        (function(){
-          const img = document.getElementById('result-img');
-          const countsEl = document.getElementById('classCounts');
-          let tries = 0;
-          function check(){
-            tries += 1;
-            const url = img.src.split('?')[0] + '?t=' + Date.now();
-            const tester = new Image();
-            tester.onload = function(){
-              // image available; set src to the cache-busted URL
-              img.src = url;
-              // fetch label counts from server endpoint
-              fetch('/_result_counts?path=' + encodeURIComponent('{{ img_url }}'))
-                .then(r => r.json())
-                .then(data => {
-                  if (data && Object.keys(data).length>0){
-                    let html = '';
-                    for (const [k,v] of Object.entries(data)) html += `<strong>${k}</strong>: ${v}&nbsp;&nbsp;`;
-                    countsEl.innerHTML = html;
-                  } else {
-                    countsEl.innerText = 'No detections.';
-                  }
-                }).catch(e => { countsEl.innerText = 'Results ready'; });
-            };
-            tester.onerror = function(){
-              if (tries < 20) setTimeout(check, 1000);
-              else countsEl.innerText = 'Could not load result image.';
-            };
-            tester.src = url;
-          }
-          check();
-        })();
-        </script>
-      {% else %}
-        <p>No results available yet.</p>
-      {% endif %}
+    body[data-theme="dark"] {
+      --card: #0f172a;
+      --text: #e2e8f0;
+      --muted: #94a3b8;
+      --border: #1f2937;
+      --shadow: 0 18px 50px rgba(2, 6, 23, 0.45);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      font-family: "Inter", "Segoe UI", system-ui, -apple-system, sans-serif;
+      background: radial-gradient(circle at top left, #1e293b 0%, #0f172a 40%, #020617 100%);
+      color: var(--text);
+      min-height: 100vh;
+    }
+
+    body[data-theme="dark"] .panel,
+    body[data-theme="dark"] .preview,
+    body[data-theme="dark"] .card,
+    body[data-theme="dark"] .config-box {
+      background: #0b1220;
+      border-color: #1f2937;
+    }
+
+    body[data-theme="dark"] .counts,
+    body[data-theme="dark"] .violations {
+      background: #0f172a;
+      border-color: #1f2937;
+      color: var(--text);
+    }
+
+    .page {
+      padding: 40px 20px 80px;
+    }
+
+    .shell {
+      max-width: 1100px;
+      margin: 0 auto;
+    }
+
+    .hero {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 20px;
+      align-items: center;
+      justify-content: space-between;
+      background: linear-gradient(135deg, rgba(15, 23, 42, 0.9), rgba(30, 41, 59, 0.95));
+      padding: 24px;
+      border-radius: 18px;
+      color: #f8fafc;
+      box-shadow: var(--shadow);
+      border: 1px solid rgba(148, 163, 184, 0.2);
+    }
+
+    .hero h1 {
+      margin: 0;
+      font-size: 28px;
+    }
+
+    .hero p {
+      margin: 6px 0 0;
+      color: rgba(248, 250, 252, 0.75);
+      font-size: 14px;
+    }
+
+    .hero-actions a {
+      text-decoration: none;
+      color: #0f172a;
+      background: #f8fafc;
+      padding: 10px 16px;
+      border-radius: 10px;
+      font-weight: 600;
+      display: inline-flex;
+      gap: 8px;
+      align-items: center;
+      transition: all 0.2s ease;
+    }
+
+    .toggle {
+      border: 1px solid rgba(148, 163, 184, 0.45);
+      background: transparent;
+      color: #e2e8f0;
+      padding: 8px 12px;
+      border-radius: 999px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+
+    .hero-actions a:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 10px 25px rgba(15, 23, 42, 0.25);
+    }
+
+    .panel {
+      margin-top: 26px;
+      background: #ffffff;
+      border-radius: 18px;
+      padding: 24px;
+      box-shadow: var(--shadow);
+    }
+
+    .panel-header {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 18px;
+    }
+
+    .panel-header h2 {
+      margin: 0;
+      font-size: 20px;
+    }
+
+    .config-box {
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 14px;
+      background: #f8fafc;
+    }
+
+    .config-box label {
+      display: block;
+      font-weight: 600;
+      margin-bottom: 6px;
+    }
+
+    .config-box select {
+      width: 100%;
+      padding: 10px;
+      border-radius: 10px;
+      border: 1px solid var(--border);
+      background: #fff;
+    }
+
+    .hint {
+      margin-top: 6px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .cards {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      gap: 18px;
+      margin-top: 18px;
+    }
+
+    .analytics {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      gap: 16px;
+      margin-top: 18px;
+    }
+
+    .chart {
+      background: #f8fafc;
+      border-radius: 12px;
+      padding: 14px;
+      border: 1px solid var(--border);
+    }
+
+    .chart-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      margin-bottom: 10px;
+    }
+
+    .chart-header h4 {
+      margin: 0;
+    }
+
+    .chart button {
+      border: 1px solid var(--border);
+      background: #ffffff;
+      padding: 4px 10px;
+      border-radius: 999px;
+      font-size: 12px;
+      cursor: pointer;
+      font-weight: 600;
+    }
+
+    .chart h4 {
+      margin: 0 0 10px;
+      font-size: 14px;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+
+    .bar {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 8px;
+      font-size: 13px;
+    }
+
+    .bar span {
+      width: 90px;
+      color: var(--muted);
+    }
+
+    .bar .track {
+      flex: 1;
+      background: #e2e8f0;
+      border-radius: 999px;
+      overflow: hidden;
+      height: 10px;
+    }
+
+    .bar .fill {
+      height: 100%;
+      background: linear-gradient(90deg, #38bdf8, #0ea5e9);
+      width: 0;
+    }
+
+    .skeleton {
+      background: linear-gradient(90deg, #e2e8f0 0%, #f8fafc 50%, #e2e8f0 100%);
+      background-size: 200% 100%;
+      animation: shimmer 1.2s infinite;
+      border-radius: 8px;
+      height: 18px;
+      margin-bottom: 10px;
+    }
+
+    @keyframes shimmer {
+      0% { background-position: 200% 0; }
+      100% { background-position: -200% 0; }
+    }
+
+    .card {
+      border-radius: 16px;
+      border: 1px solid var(--border);
+      padding: 18px;
+      background: #ffffff;
+      box-shadow: 0 10px 24px rgba(15, 23, 42, 0.08);
+    }
+
+    .card h3 {
+      margin-top: 0;
+      margin-bottom: 12px;
+      font-size: 16px;
+    }
+
+    .card input[type="file"],
+    .card input[type="text"] {
+      width: 100%;
+      padding: 10px;
+      border-radius: 10px;
+      border: 1px solid var(--border);
+      margin-bottom: 14px;
+    }
+
+    .button {
+      width: 100%;
+      padding: 11px 14px;
+      border-radius: 10px;
+      border: none;
+      font-weight: 600;
+      cursor: pointer;
+      transition: transform 0.2s ease, box-shadow 0.2s ease;
+    }
+
+    .button.primary {
+      background: linear-gradient(135deg, var(--success), #16a34a);
+      color: white;
+    }
+
+    .button.secondary {
+      background: linear-gradient(135deg, var(--danger), #dc2626);
+      color: white;
+    }
+
+    .button:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 10px 22px rgba(15, 23, 42, 0.2);
+    }
+
+    .preview {
+      margin-top: 30px;
+      background: #ffffff;
+      border-radius: 18px;
+      padding: 24px;
+      box-shadow: var(--shadow);
+    }
+
+    .preview h2 {
+      margin-top: 0;
+    }
+
+    .result-media {
+      width: 100%;
+      max-width: 900px;
+      border-radius: 12px;
+      border: 1px solid var(--border);
+      margin-top: 12px;
+    }
+
+    .counts {
+      background: #f1f5f9;
+      border-radius: 10px;
+      padding: 10px 12px;
+      font-size: 14px;
+      color: var(--muted);
+    }
+
+    .violations {
+      margin-top: 24px;
+      padding: 18px;
+      border-radius: 14px;
+      background: #fff7ed;
+      border: 1px solid #fdba74;
+    }
+
+    .violations h3 {
+      margin: 0 0 12px;
+      color: #9a3412;
+    }
+
+    .violations table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.9em;
+    }
+
+    .violations th {
+      text-align: left;
+      background: #fed7aa;
+      padding: 8px;
+      font-weight: 600;
+    }
+
+    .violations td {
+      padding: 8px;
+      border-bottom: 1px solid #fcd34d;
+    }
+
+    .violations img {
+      width: 64px;
+      height: 44px;
+      object-fit: cover;
+      border-radius: 6px;
+      border: 1px solid #e2e8f0;
+    }
+
+    .modal {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(15, 23, 42, 0.85);
+      align-items: center;
+      justify-content: center;
+      z-index: 9999;
+    }
+
+    .modal-content {
+      background: #0b1220;
+      padding: 16px;
+      border-radius: 14px;
+      max-width: 90vw;
+      max-height: 90vh;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      color: #e2e8f0;
+    }
+
+    .modal-content img {
+      max-width: 80vw;
+      max-height: 70vh;
+      border-radius: 10px;
+      border: 1px solid #1f2937;
+      transform-origin: center;
+    }
+
+    .modal-actions {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+    }
+
+    .modal-actions button {
+      flex: 1;
+      padding: 8px 12px;
+      border-radius: 8px;
+      border: none;
+      font-weight: 600;
+      cursor: pointer;
+    }
+
+    .modal-actions .nav {
+      background: #1f2937;
+      color: #e2e8f0;
+    }
+
+    .modal-actions .zoom {
+      background: #0ea5e9;
+      color: #fff;
+    }
+
+    .status-badge {
+      display: inline-flex;
+      padding: 2px 8px;
+      border-radius: 999px;
+      background: #e0f2fe;
+      color: #0369a1;
+      font-size: 12px;
+      font-weight: 600;
+    }
+
+    @media (max-width: 720px) {
+      .hero {
+        flex-direction: column;
+        align-items: flex-start;
+      }
+    }
+  </style>
+</head>
+
+<body>
+  <div class="page">
+    <div class="shell">
+      <section class="hero">
+        <div>
+          <h1>Smart Traffic Inference</h1>
+          <p>Upload images, process live feeds, and review violations with real-time evidence capture.</p>
+        </div>
+        <div class="hero-actions">
+          <a href="/dashboard">View Violations →</a>
+          <button class="toggle" type="button" onclick="toggleTheme()">Toggle Theme</button>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-header">
+          <h2>Camera Configuration</h2>
+          <span class="status-badge">Step 1</span>
+        </div>
+        <div class="config-box">
+          <label for="camera_select">Select Camera Geometry</label>
+          <select id="camera_select" name="camera_id" form="uploadForm">
+            <option value="default">Default (Generic Stop/Lane Line)</option>
+            {% for cam_id, cam_cfg in cameras.items() %}
+            {% if cam_id != 'default' %}
+            <option value="{{ cam_id }}">{{ cam_cfg.get('description', cam_id) }}</option>
+            {% endif %}
+            {% endfor %}
+          </select>
+          <div class="hint">Defines stop-line and lane boundaries. See <code>config/cameras.json</code>.</div>
+        </div>
+
+        <div class="cards">
+          <div class="card">
+            <h3>Option A · Upload Video/Image</h3>
+            <form id="uploadForm" action="/predict" method="post" enctype="multipart/form-data">
+              <input type="file" name="file" accept="image/*,video/*" required>
+              <button type="submit" class="button primary" onclick="copyCameraId('uploadForm')">Process Upload</button>
+            </form>
+          </div>
+
+          <div class="card">
+            <h3>Option B · Live Stream</h3>
+            <form id="streamForm" action="/predict_video" method="post">
+              <div style="margin-bottom: 10px; display:flex; gap:12px; flex-wrap:wrap; font-size:14px;">
+                <label><input type="radio" name="source_type" value="webcam" checked onclick="toggleUrlInput(false)"> Webcam (USB)</label>
+                <label><input type="radio" name="source_type" value="rtsp" onclick="toggleUrlInput(true)"> RTSP / URL</label>
+              </div>
+              <input type="text" id="streamUrl" name="url" placeholder="rtsp://admin:pass@192.168.1.10..." style="display:none;">
+              <input type="hidden" name="dummy_webcam" value="0">
+              <button type="submit" class="button secondary" onclick="prepareStreamForm()">Start Live Feed</button>
+            </form>
+          </div>
+        </div>
+      </section>
     </div>
+  </div>
+
+  <script>
+    const themeKey = 'smart_traffic_theme';
+    function applyTheme(theme) {
+      document.body.dataset.theme = theme;
+      localStorage.setItem(themeKey, theme);
+    }
+
+    function toggleTheme() {
+      const current = document.body.dataset.theme || 'light';
+      applyTheme(current === 'dark' ? 'light' : 'dark');
+    }
+
+    (function initTheme() {
+      const saved = localStorage.getItem(themeKey) || 'light';
+      applyTheme(saved);
+    })();
+
+    function toggleUrlInput(show) {
+      document.getElementById('streamUrl').style.display = show ? 'block' : 'none';
+      if (show) document.getElementById('streamUrl').required = true;
+      else document.getElementById('streamUrl').required = false;
+    }
+
+    function copyCameraId(formId) {
+      // Inject camera_id into form/input before submit
+      // Actually, we can just grab the select value safely
+      // But for multiple forms it's easier to dynamically create a hidden input
+      let form = document.getElementById(formId);
+      let camVal = document.getElementById('camera_select').value;
+
+      // Remove old hidden if exists
+      let old = form.querySelector('input[name="camera_id"]');
+      if (old) old.remove();
+
+      let hidden = document.createElement("input");
+      hidden.setAttribute("type", "hidden");
+      hidden.setAttribute("name", "camera_id");
+      hidden.setAttribute("value", camVal);
+      form.appendChild(hidden);
+    }
+
+    function prepareStreamForm() {
+      let form = document.getElementById('streamForm');
+      copyCameraId('streamForm');
+
+      // Handle webcam vs rtsp logic for backend
+      let type = form.querySelector('input[name="source_type"]:checked').value;
+      if (type === 'webcam') {
+        // For webcam, backend expects 'url' to be '0' or device index
+        // We'll reuse the url field
+        let urlInput = document.getElementById('streamUrl');
+        urlInput.value = '0'; // default webcam index
+        urlInput.disabled = false; // ensure it sends
+      }
+    }
+  </script>
+
+  {% if request.args.get('result') or img_url %}
+  <div class="preview shell">
+    <h2>Result</h2>
+    {% set result_param = request.args.get('result') %}
+    {% if result_param %}
+    {# compute static path for the image #}
+    {% set img_url = '/static/' + result_param %}
     {% endif %}
-  </body>
+
+    {% if img_url and img_url != '' %}
+    {% set run_dir = img_url.rsplit('/', 1)[0] %}
+    {# compute class counts server-side by reading labels on refresh; template will show placeholder while JS polls #}
+  <p id="classCounts" class="counts">Loading results...</p>
+    {% if img_url.lower().endswith('.mp4') %}
+  <video controls class="result-media">
+      <source src="{{ img_url }}" type="video/mp4">
+      Your browser does not support the video tag.
+    </video>
+    <p>Video processing complete. Tracking data saved.</p>
+    {% else %}
+    <img id="result-img" src="{{ img_url }}" alt="result image" class="result-media">
+
+    <script>
+      // Auto-reload the image until it successfully loads (cache-busted)
+      (function () {
+        const img = document.getElementById('result-img');
+        const countsEl = document.getElementById('classCounts');
+        let tries = 0;
+        function check() {
+          tries += 1;
+          const url = img.src.split('?')[0] + '?t=' + Date.now();
+          const tester = new Image();
+          tester.onload = function () {
+            // image available; set src to the cache-busted URL
+            img.src = url;
+            // fetch label counts from server endpoint
+            fetch('/_result_counts?path=' + encodeURIComponent('{{ img_url }}'))
+              .then(r => r.json())
+              .then(data => {
+                if (data && Object.keys(data).length > 0) {
+                  let html = '';
+                  for (const [k, v] of Object.entries(data)) html += `<strong>${k}</strong>: ${v}&nbsp;&nbsp;`;
+                  countsEl.innerHTML = html;
+                } else {
+                  countsEl.innerText = 'No detections.';
+                }
+              }).catch(e => { countsEl.innerText = 'Results ready'; });
+          };
+          tester.onerror = function () {
+            if (tries < 20) setTimeout(check, 1000);
+            else countsEl.innerText = 'Could not load result image.';
+          };
+          tester.src = url;
+        }
+        check();
+      })();
+    </script>
+    {% endif %}
+
+    <!-- Recent Violations Section -->
+    <div id="recent-violations" class="violations">
+      <h3>🚨 Recent Violations</h3>
+      <div id="violations-list">
+        <div class="skeleton" style="width:70%;"></div>
+        <div class="skeleton" style="width:90%;"></div>
+        <div class="skeleton" style="width:60%;"></div>
+      </div>
+    </div>
+
+    <div class="analytics">
+      <div class="chart" id="chart-type">
+        <div class="chart-header">
+          <h4>Violations by Type</h4>
+          <button type="button" onclick="downloadChart('type')">Download PNG</button>
+        </div>
+        <div class="skeleton" style="width:80%;"></div>
+        <div class="skeleton" style="width:60%;"></div>
+      </div>
+      <div class="chart" id="chart-time">
+        <div class="chart-header">
+          <h4>Recent Activity</h4>
+          <button type="button" onclick="downloadChart('time')">Download PNG</button>
+        </div>
+        <div class="skeleton" style="width:75%;"></div>
+        <div class="skeleton" style="width:55%;"></div>
+      </div>
+    </div>
+    <script>
+      // Fetch and display recent violations
+      (function() {
+        let evidenceImages = [];
+        let activeIndex = 0;
+        let chartData = { type: {}, time: {} };
+        function renderCharts(data) {
+          const typeChart = document.getElementById('chart-type');
+          const timeChart = document.getElementById('chart-time');
+          if (!data || data.length === 0) {
+            typeChart.innerHTML = '<div class="chart-header"><h4>Violations by Type</h4><button type="button" onclick="downloadChart(\'type\')">Download PNG</button></div><p class="hint">No data yet.</p>';
+            timeChart.innerHTML = '<div class="chart-header"><h4>Recent Activity</h4><button type="button" onclick="downloadChart(\'time\')">Download PNG</button></div><p class="hint">No data yet.</p>';
+            chartData = { type: {}, time: {} };
+            return;
+          }
+          const typeCounts = {};
+          const timeCounts = {};
+          data.forEach(v => {
+            typeCounts[v.violation_type] = (typeCounts[v.violation_type] || 0) + 1;
+            const label = v.timestamp.slice(0, 16);
+            timeCounts[label] = (timeCounts[label] || 0) + 1;
+          });
+          const maxType = Math.max(...Object.values(typeCounts));
+          const maxTime = Math.max(...Object.values(timeCounts));
+          chartData = { type: typeCounts, time: timeCounts };
+          typeChart.innerHTML = '<div class="chart-header"><h4>Violations by Type</h4><button type="button" onclick="downloadChart(\'type\')">Download PNG</button></div>' + Object.entries(typeCounts).map(([k, v]) => {
+            const width = (v / maxType) * 100;
+            return `<div class="bar"><span>${k}</span><div class="track"><div class="fill" style="width:${width}%"></div></div><strong>${v}</strong></div>`;
+          }).join('');
+          timeChart.innerHTML = '<div class="chart-header"><h4>Recent Activity</h4><button type="button" onclick="downloadChart(\'time\')">Download PNG</button></div>' + Object.entries(timeCounts).slice(-8).map(([k, v]) => {
+            const width = (v / maxTime) * 100;
+            return `<div class="bar"><span>${k.split(' ')[1]}</span><div class="track"><div class="fill" style="width:${width}%"></div></div><strong>${v}</strong></div>`;
+          }).join('');
+        }
+
+        window.downloadChart = function(kind) {
+          const data = chartData[kind] || {};
+          const entries = Object.entries(data);
+          if (!entries.length) return;
+          const canvas = document.createElement('canvas');
+          const width = 700;
+          const barHeight = 24;
+          const gap = 10;
+          const height = 80 + entries.length * (barHeight + gap);
+          canvas.width = width;
+          canvas.height = height;
+          const ctx = canvas.getContext('2d');
+          ctx.fillStyle = '#0f172a';
+          ctx.fillRect(0, 0, width, height);
+          ctx.fillStyle = '#e2e8f0';
+          ctx.font = '16px Inter, sans-serif';
+          ctx.fillText(kind === 'type' ? 'Violations by Type' : 'Recent Activity', 24, 32);
+          const max = Math.max(...entries.map(([, v]) => v));
+          entries.forEach(([label, value], idx) => {
+            const y = 60 + idx * (barHeight + gap);
+            const barWidth = Math.round((value / max) * (width - 220));
+            ctx.fillStyle = '#38bdf8';
+            ctx.fillRect(180, y, barWidth, barHeight);
+            ctx.fillStyle = '#e2e8f0';
+            ctx.fillText(label, 24, y + 17);
+            ctx.fillText(String(value), 190 + barWidth, y + 17);
+          });
+          const link = document.createElement('a');
+          link.download = `chart_${kind}.png`;
+          link.href = canvas.toDataURL('image/png');
+          link.click();
+        }
+
+        function openModal(index) {
+          activeIndex = index;
+          const modal = document.getElementById('evidence-modal');
+          const img = document.getElementById('evidence-img');
+          img.style.transform = 'scale(1)';
+          img.src = evidenceImages[activeIndex];
+          modal.style.display = 'flex';
+        }
+
+        function closeModal() {
+          document.getElementById('evidence-modal').style.display = 'none';
+        }
+
+        window.nextEvidence = function(delta) {
+          if (!evidenceImages.length) return;
+          activeIndex = (activeIndex + delta + evidenceImages.length) % evidenceImages.length;
+          document.getElementById('evidence-img').src = evidenceImages[activeIndex];
+        }
+
+        window.zoomEvidence = function(delta) {
+          const img = document.getElementById('evidence-img');
+          const current = parseFloat(img.dataset.scale || '1');
+          const next = Math.min(3, Math.max(1, current + delta));
+          img.dataset.scale = next;
+          img.style.transform = `scale(${next})`;
+        }
+
+        function loadViolations() {
+          fetch('/api/recent_violations')
+            .then(r => r.json())
+            .then(data => {
+              const container = document.getElementById('violations-list');
+              if (!data || data.length === 0) {
+                container.innerHTML = '<p style="color:#666;">No violations detected yet.</p>';
+                renderCharts([]);
+                return;
+              }
+              evidenceImages = data.filter(v => v.image_path).map(v => `/static/${v.image_path}`);
+              let html = '<table>';
+              html += '<tr><th>Time</th><th>Type</th><th>Vehicle</th><th>Evidence</th></tr>';
+              data.forEach(v => {
+                html += '<tr>';
+                html += `<td>${v.timestamp}</td>`;
+                html += `<td>${v.violation_type}</td>`;
+                html += `<td>${v.vehicle_type}</td>`;
+                if (v.image_path) {
+                  const idx = evidenceImages.indexOf(`/static/${v.image_path}`);
+                  html += `<td><img src="/static/${v.image_path}" onclick="openModal(${idx})"></td>`;
+                } else {
+                  html += '<td style="color:#999;">-</td>';
+                }
+                html += '</tr>';
+              });
+              html += '</table>';
+              html += '<p style="margin-top:10px;"><a href="/dashboard" style="color:#0ea5e9; font-weight:bold;">View All Violations →</a></p>';
+              container.innerHTML = html;
+              renderCharts(data);
+            })
+            .catch(e => {
+              document.getElementById('violations-list').innerHTML = '<p style="color:#999;">Could not load violations.</p>';
+              renderCharts([]);
+            });
+        }
+        loadViolations();
+        // Refresh violations every 5 seconds
+        setInterval(loadViolations, 5000);
+      })();
+    </script>
+    {% else %}
+    <p>No results available yet.</p>
+    {% endif %}
+  </div>
+  {% endif %}
+  <div id="evidence-modal" class="modal" onclick="closeModal()">
+    <div class="modal-content" onclick="event.stopPropagation()">
+      <img id="evidence-img" src="" alt="Evidence">
+      <div class="modal-actions">
+        <button class="nav" onclick="nextEvidence(-1)">Prev</button>
+        <button class="nav" onclick="nextEvidence(1)">Next</button>
+        <button class="zoom" onclick="zoomEvidence(0.2)">Zoom +</button>
+        <button class="zoom" onclick="zoomEvidence(-0.2)">Zoom -</button>
+      </div>
+    </div>
+  </div>
+</body>
+
 </html>

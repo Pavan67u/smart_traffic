@@ -1,0 +1,8 @@
+train: ../data/vehicles_yolo/train/images
+val: ../data/vehicles_yolo/val/images
+nc: 5
+names: ['car','bus','truck','motorbike','person']
+epochs: 50
+batch: 16
+imgsz: 640
+seed: 42

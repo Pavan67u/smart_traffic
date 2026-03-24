@@ -1,6 +1,6 @@
-# Dataset configuration
-path: /Users/Pavan/projects/smart_traffic/data/vehicles_yolo  # absolute path to dataset
+# Dataset configuration (path is relative to repo root when running training)
+path: /Users/Pavan/projects/smart_traffic/data/vehicles_yolo
 train: train/images
 val: val/images
-test: test/images  # optional
+test: test/images
 names: [car, bus, truck, motorbike, person]

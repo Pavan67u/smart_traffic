@@ -1,5 +1,5 @@
 ultralytics==8.3.58
-opencv-python==4.10.0.84
+opencv-python>=4.6.0
 lapx==0.5.9 # for ByteTrack/DeepSORT ops
 numpy==1.26.4
 scipy==1.11.4
@@ -11,5 +11,6 @@ pydantic==2.9.2
 boto3==1.35.31 # S3/MinIO
 redis==5.0.8
 psycopg2-binary==2.9.9
-paddleocr==2.7.3
-Shapely==2.1.2
+# paddleocr==2.7.3
+Shapely>=2.0.0
+fpdf2==2.7.5

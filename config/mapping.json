@@ -1,0 +1,6 @@
+{
+  "detector_to_project": { "0": 4, "2": 0, "3": 3, "5": 1, "7": 2 },
+  "confidence_threshold": 0.30,
+  "nms_iou": 0.45,
+  "ignore_unmapped": true
+}

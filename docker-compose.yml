@@ -1,0 +1,17 @@
+version: '3.8'
+
+services:
+  web_app:
+    build: .
+    container_name: smart_traffic_web
+    ports:
+      - "5000:5000"
+    volumes:
+      # Persist models so user can add custom models
+      - ./models:/app/models
+      # Persist uploads and results
+      - ./web_app/static/uploads:/app/web_app/static/uploads
+      - ./web_app/static/results:/app/web_app/static/results
+    environment:
+      - FLASK_ENV=production
+    restart: unless-stopped

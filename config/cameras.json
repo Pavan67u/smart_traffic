@@ -1,0 +1,43 @@
+{
+    "default": {
+        "stop_line_y": 350,
+        "lane_line": [
+            [
+                960,
+                0
+            ],
+            [
+                960,
+                1080
+            ]
+        ]
+    },
+    "intersection_a": {
+        "description": "Main Street North",
+        "stop_line_y": 600,
+        "lane_line": [
+            [
+                640,
+                0
+            ],
+            [
+                640,
+                720
+            ]
+        ]
+    },
+    "intersection_b": {
+        "description": "Broadway South",
+        "stop_line_y": 450,
+        "lane_line": [
+            [
+                800,
+                0
+            ],
+            [
+                800,
+                1080
+            ]
+        ]
+    }
+}

@@ -1,0 +1,695 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Traffic Violations Dashboard</title>
+  <!-- Auto-refresh controlled by toggle -->
+  <style>
+    :root {
+      --bg: #0f172a;
+      --surface: #ffffff;
+      --muted: #64748b;
+      --accent: #38bdf8;
+      --accent-strong: #0ea5e9;
+      --success: #22c55e;
+      --danger: #ef4444;
+      --border: #e2e8f0;
+      --shadow: 0 18px 50px rgba(15, 23, 42, 0.2);
+    }
+
+    body[data-theme="dark"] {
+      --surface: #0b1220;
+      --muted: #94a3b8;
+      --border: #1f2937;
+      --shadow: 0 18px 50px rgba(2, 6, 23, 0.45);
+      color: #e2e8f0;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: "Inter", "Segoe UI", system-ui, -apple-system, sans-serif;
+      margin: 0;
+      background: radial-gradient(circle at top left, #1e293b 0%, #0f172a 40%, #020617 100%);
+      color: #0f172a;
+      min-height: 100vh;
+    }
+
+    body[data-theme="dark"] table,
+    body[data-theme="dark"] .panel {
+      background: #0b1220;
+      border-color: #1f2937;
+    }
+
+    header {
+      background: linear-gradient(135deg, #0f172a, #1e293b);
+      color: white;
+      padding: 1.2rem 2rem;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 20px;
+      flex-wrap: wrap;
+      border-bottom: 1px solid rgba(148, 163, 184, 0.2);
+    }
+
+    header h1 {
+      margin: 0;
+      font-size: 1.4rem;
+    }
+
+    nav {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+
+    nav a {
+      color: #e2e8f0;
+      text-decoration: none;
+      font-weight: 600;
+      padding: 8px 12px;
+      border-radius: 10px;
+      border: 1px solid transparent;
+      transition: all 0.2s ease;
+    }
+
+    nav a:hover {
+      background: rgba(148, 163, 184, 0.15);
+      border-color: rgba(148, 163, 184, 0.4);
+    }
+
+    .toggle {
+      border: 1px solid rgba(148, 163, 184, 0.45);
+      background: transparent;
+      color: #e2e8f0;
+      padding: 6px 12px;
+      border-radius: 999px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+
+    .container {
+      max-width: 1200px;
+      margin: 32px auto 60px;
+      padding: 0 20px;
+    }
+
+    .panel {
+      background: var(--surface);
+      border-radius: 18px;
+      padding: 24px;
+      box-shadow: var(--shadow);
+    }
+
+    .stats {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 14px;
+      margin-bottom: 18px;
+    }
+
+    .filters {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 12px;
+      margin-bottom: 14px;
+    }
+
+    .filters label {
+      font-size: 12px;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      margin-bottom: 6px;
+      display: block;
+    }
+
+    .filters select,
+    .filters input {
+      width: 100%;
+      padding: 8px 10px;
+      border-radius: 10px;
+      border: 1px solid var(--border);
+      background: #fff;
+    }
+
+    body[data-theme="dark"] .filters select,
+    body[data-theme="dark"] .filters input {
+      background: #0b1220;
+      color: #e2e8f0;
+    }
+
+    .stat-card {
+      background: #f8fafc;
+      border-radius: 14px;
+      padding: 14px;
+      border: 1px solid var(--border);
+    }
+
+    .stat-card h4 {
+      margin: 0 0 6px;
+      font-size: 12px;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+
+    .stat-card strong {
+      font-size: 20px;
+    }
+
+    .chart {
+      margin-top: 14px;
+      background: #f1f5f9;
+      border-radius: 12px;
+      padding: 12px;
+      border: 1px solid var(--border);
+    }
+
+    .bar {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 8px;
+      font-size: 13px;
+    }
+
+    .bar span {
+      width: 100px;
+      color: var(--muted);
+    }
+
+    .bar .track {
+      flex: 1;
+      background: #e2e8f0;
+      border-radius: 999px;
+      overflow: hidden;
+      height: 10px;
+    }
+
+    .bar .fill {
+      height: 100%;
+      background: linear-gradient(90deg, #38bdf8, #0ea5e9);
+      width: 0;
+    }
+
+    .chart-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 10px;
+    }
+
+    .chart-header button {
+      border: 1px solid var(--border);
+      background: #ffffff;
+      padding: 4px 10px;
+      border-radius: 999px;
+      font-size: 12px;
+      cursor: pointer;
+      font-weight: 600;
+    }
+
+    .panel h2 {
+      margin-top: 0;
+      margin-bottom: 18px;
+      font-size: 1.25rem;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      background: white;
+      border-radius: 12px;
+      overflow: hidden;
+      border: 1px solid var(--border);
+    }
+
+    th,
+    td {
+      padding: 12px 14px;
+      text-align: left;
+      border-bottom: 1px solid var(--border);
+      font-size: 0.9rem;
+    }
+
+    th {
+      background-color: #0f172a;
+      color: white;
+      text-transform: uppercase;
+      font-size: 0.75rem;
+      letter-spacing: 0.08em;
+    }
+
+    tr:hover {
+      background-color: #f8fafc;
+    }
+
+    .status-new,
+    .status-reviewed,
+    .status-sent {
+      font-weight: 700;
+      padding: 4px 8px;
+      border-radius: 999px;
+      font-size: 0.75rem;
+      display: inline-block;
+    }
+
+    .status-new {
+      background: #fee2e2;
+      color: #b91c1c;
+    }
+
+    .status-reviewed {
+      background: #dcfce7;
+      color: #15803d;
+    }
+
+    .status-sent {
+      background: #e0f2fe;
+      color: #0369a1;
+    }
+
+    .thumb {
+      width: 84px;
+      height: 56px;
+      object-fit: cover;
+      border-radius: 8px;
+      cursor: pointer;
+      border: 1px solid var(--border);
+    }
+
+    .btn {
+      padding: 6px 12px;
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 0.8rem;
+      font-weight: 600;
+    }
+
+    .btn-review {
+      background-color: var(--success);
+      color: white;
+    }
+
+    .btn-send {
+      background-color: var(--accent-strong);
+      color: white;
+    }
+
+    .toolbar {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      margin-bottom: 16px;
+    }
+
+    .toolbar a {
+      border: 1px solid var(--border);
+      padding: 8px 12px;
+      border-radius: 10px;
+      text-decoration: none;
+      color: #0f172a;
+      font-weight: 600;
+      background: #f8fafc;
+    }
+
+    .toggle-row {
+      display: flex;
+      gap: 12px;
+      align-items: center;
+      margin-bottom: 12px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    #modal {
+      display: none;
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: rgba(15, 23, 42, 0.85);
+      justify-content: center;
+      align-items: center;
+      z-index: 1000;
+    }
+
+    #modal img {
+      max-width: 90%;
+      max-height: 90%;
+      border-radius: 12px;
+      box-shadow: 0 25px 60px rgba(15, 23, 42, 0.35);
+    }
+
+    .modal-actions {
+      margin-top: 10px;
+      display: flex;
+      gap: 10px;
+    }
+
+    .modal-actions button {
+      flex: 1;
+      padding: 8px 12px;
+      border-radius: 8px;
+      border: none;
+      cursor: pointer;
+      font-weight: 600;
+    }
+
+    .modal-actions .nav {
+      background: #1f2937;
+      color: #e2e8f0;
+    }
+
+    .modal-actions .zoom {
+      background: #0ea5e9;
+      color: #fff;
+    }
+  </style>
+</head>
+
+<body>
+  <header>
+    <h1>Smart Traffic Dashboard</h1>
+    <nav>
+      <a href="/export/csv">Export CSV</a>
+      <a href="/export/pdf">Export PDF</a>
+      <a href="/">Inference</a>
+      <a href="/dashboard">Violations</a>
+      <button class="toggle" type="button" onclick="toggleTheme()">Toggle Theme</button>
+    </nav>
+  </header>
+
+  <div class="container">
+    <div class="panel">
+      <div class="panel-header">
+        <h2>Violation Log</h2>
+      </div>
+      <div class="toggle-row">
+        <label><input type="checkbox" id="autoRefresh" checked> Auto-refresh every 10s</label>
+        <button class="toggle" type="button" onclick="toggleTheme()">Toggle Theme</button>
+      </div>
+      <div class="filters">
+        <div>
+          <label for="filter-type">Violation Type</label>
+          <select id="filter-type">
+            <option value="">All</option>
+          </select>
+        </div>
+        <div>
+          <label for="filter-vehicle">Vehicle Type</label>
+          <select id="filter-vehicle">
+            <option value="">All</option>
+          </select>
+        </div>
+        <div>
+          <label for="filter-start">Start Date</label>
+          <input type="date" id="filter-start">
+        </div>
+        <div>
+          <label for="filter-end">End Date</label>
+          <input type="date" id="filter-end">
+        </div>
+      </div>
+      <div class="stats">
+        <div class="stat-card"><h4>Total Violations</h4><strong id="stat-total">0</strong></div>
+        <div class="stat-card"><h4>New</h4><strong id="stat-new">0</strong></div>
+        <div class="stat-card"><h4>Reviewed</h4><strong id="stat-reviewed">0</strong></div>
+        <div class="stat-card"><h4>Sent</h4><strong id="stat-sent">0</strong></div>
+      </div>
+      <div class="chart" id="chart-type">
+        <div class="chart-header">
+          <strong>Violation Mix</strong>
+          <button type="button" onclick="downloadChart()">Download PNG</button>
+        </div>
+        <div class="bar"><span>Loading...</span><div class="track"><div class="fill" style="width:0"></div></div><strong></strong></div>
+      </div>
+      <table>
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>Timestamp</th>
+          <th>Type</th>
+          <th>Confidence</th>
+          <th>Track ID</th>
+          <th>Vehicle</th>
+          <th>Evidence</th>
+          <th>Status</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for v in violations %}
+        <tr>
+          <td>#{{ v.id }}</td>
+          <td>{{ v.timestamp.strftime('%Y-%m-%d %H:%M:%S') }}</td>
+          <td>{{ v.violation_type }}</td>
+          <td>{{ "%.2f"|format(v.confidence) if v.confidence else '-' }}</td>
+          <td>{{ v.track_id if v.track_id else '-' }}</td>
+          <td>{{ v.vehicle_type or 'Unknown' }}</td>
+          <td>
+            {% if v.image_path %}
+            <img src="/static/{{ v.image_path }}" class="thumb" onclick="openModal(this.src)">
+            {% else %}
+            <span style="color: #999;">No Image</span>
+            {% endif %}
+          </td>
+          <td>
+            <span class="status-{{ v.status|lower }}">{{ v.status }}</span>
+          </td>
+          <td>
+            {% if v.status == 'New' %}
+            <form action="/dashboard/update/{{ v.id }}" method="post" style="display:inline;">
+              <input type="hidden" name="status" value="Reviewed">
+              <button class="btn btn-review">Ack</button>
+            </form>
+            {% elif v.status == 'Reviewed' %}
+            <form action="/dashboard/update/{{ v.id }}" method="post" style="display:inline;">
+              <input type="hidden" name="status" value="Sent">
+              <button class="btn btn-send">Send</button>
+            </form>
+            {% else %}
+            -
+            {% endif %}
+          </td>
+        </tr>
+        {% else %}
+        <tr>
+          <td colspan="9" style="text-align:center; color: #777;">No violations recorded.</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div id="modal" onclick="this.style.display='none'">
+    <div class="panel" style="max-width:90vw; max-height:90vh;">
+      <img id="modal-img" src="">
+      <div class="modal-actions">
+        <button class="nav" onclick="nextEvidence(-1)">Prev</button>
+        <button class="nav" onclick="nextEvidence(1)">Next</button>
+        <button class="zoom" onclick="zoomEvidence(0.2)">Zoom +</button>
+        <button class="zoom" onclick="zoomEvidence(-0.2)">Zoom -</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const themeKey = 'smart_traffic_theme';
+    function applyTheme(theme) {
+      document.body.dataset.theme = theme;
+      localStorage.setItem(themeKey, theme);
+    }
+
+    function toggleTheme() {
+      const current = document.body.dataset.theme || 'light';
+      applyTheme(current === 'dark' ? 'light' : 'dark');
+    }
+
+    (function initTheme() {
+      const saved = localStorage.getItem(themeKey) || 'light';
+      applyTheme(saved);
+    })();
+
+    let evidenceImages = Array.from(document.querySelectorAll('.thumb')).map(img => img.src);
+    let activeIndex = 0;
+    let autoRefreshTimer = null;
+    const AUTO_REFRESH_MS = 10000;
+
+    function openModal(src) {
+      document.getElementById('modal-img').src = src;
+      activeIndex = evidenceImages.indexOf(src);
+      document.getElementById('modal-img').style.transform = 'scale(1)';
+      document.getElementById('modal-img').dataset.scale = '1';
+      document.getElementById('modal').style.display = 'flex';
+    }
+
+    window.nextEvidence = function(delta) {
+      if (!evidenceImages.length) return;
+      activeIndex = (activeIndex + delta + evidenceImages.length) % evidenceImages.length;
+      document.getElementById('modal-img').src = evidenceImages[activeIndex];
+    }
+
+    window.zoomEvidence = function(delta) {
+      const img = document.getElementById('modal-img');
+      const current = parseFloat(img.dataset.scale || '1');
+      const next = Math.min(3, Math.max(1, current + delta));
+      img.dataset.scale = next;
+      img.style.transform = `scale(${next})`;
+    }
+
+    function updateStats() {
+      const rows = document.querySelectorAll('tbody tr');
+      let total = 0, newCount = 0, reviewed = 0, sent = 0;
+      const typeCounts = {};
+      rows.forEach(r => {
+        const status = r.querySelector('td:nth-child(8) span');
+        const type = r.querySelector('td:nth-child(3)');
+        if (!status || !type) return;
+        total += 1;
+        const s = status.textContent.trim();
+        if (s === 'New') newCount += 1;
+        if (s === 'Reviewed') reviewed += 1;
+        if (s === 'Sent') sent += 1;
+        const t = type.textContent.trim();
+        typeCounts[t] = (typeCounts[t] || 0) + 1;
+      });
+      document.getElementById('stat-total').textContent = total;
+      document.getElementById('stat-new').textContent = newCount;
+      document.getElementById('stat-reviewed').textContent = reviewed;
+      document.getElementById('stat-sent').textContent = sent;
+
+      const chart = document.getElementById('chart-type');
+      const max = Math.max(1, ...Object.values(typeCounts));
+      chart.innerHTML = '<div class="chart-header"><strong>Violation Mix</strong><button type="button" onclick="downloadChart()">Download PNG</button></div>' + Object.entries(typeCounts).map(([k, v]) => {
+        const width = (v / max) * 100;
+        return `<div class="bar"><span>${k}</span><div class="track"><div class="fill" style="width:${width}%"></div></div><strong>${v}</strong></div>`;
+      }).join('') || '<div class="bar"><span>No data</span><div class="track"><div class="fill" style="width:0"></div></div><strong></strong></div>';
+    }
+
+    function populateFilters() {
+      const typeSelect = document.getElementById('filter-type');
+      const vehicleSelect = document.getElementById('filter-vehicle');
+      const types = new Set();
+      const vehicles = new Set();
+      document.querySelectorAll('tbody tr').forEach(row => {
+        const type = row.querySelector('td:nth-child(3)');
+        const vehicle = row.querySelector('td:nth-child(6)');
+        if (type) types.add(type.textContent.trim());
+        if (vehicle) vehicles.add(vehicle.textContent.trim());
+      });
+      types.forEach(t => {
+        const opt = document.createElement('option');
+        opt.value = t; opt.textContent = t; typeSelect.appendChild(opt);
+      });
+      vehicles.forEach(v => {
+        const opt = document.createElement('option');
+        opt.value = v; opt.textContent = v; vehicleSelect.appendChild(opt);
+      });
+    }
+
+    function applyFilters() {
+      const typeVal = document.getElementById('filter-type').value;
+      const vehicleVal = document.getElementById('filter-vehicle').value;
+      const start = document.getElementById('filter-start').value;
+      const end = document.getElementById('filter-end').value;
+      const startDate = start ? new Date(start) : null;
+      const endDate = end ? new Date(end) : null;
+
+      document.querySelectorAll('tbody tr').forEach(row => {
+        const type = row.querySelector('td:nth-child(3)')?.textContent.trim() || '';
+        const vehicle = row.querySelector('td:nth-child(6)')?.textContent.trim() || '';
+        const ts = row.querySelector('td:nth-child(2)')?.textContent.trim() || '';
+        let show = true;
+        if (typeVal && type !== typeVal) show = false;
+        if (vehicleVal && vehicle !== vehicleVal) show = false;
+        if (startDate || endDate) {
+          const rowDate = new Date(ts.replace(' ', 'T'));
+          if (startDate && rowDate < startDate) show = false;
+          if (endDate) {
+            const endOfDay = new Date(endDate);
+            endOfDay.setHours(23, 59, 59, 999);
+            if (rowDate > endOfDay) show = false;
+          }
+        }
+        row.style.display = show ? '' : 'none';
+      });
+      updateStats();
+    }
+
+    function setupAutoRefresh() {
+      const toggle = document.getElementById('autoRefresh');
+      const saved = localStorage.getItem('auto_refresh');
+      if (saved !== null) {
+        toggle.checked = saved === 'true';
+      }
+      const schedule = () => {
+        if (autoRefreshTimer) clearInterval(autoRefreshTimer);
+        if (toggle.checked) {
+          autoRefreshTimer = setInterval(() => window.location.reload(), AUTO_REFRESH_MS);
+        }
+        localStorage.setItem('auto_refresh', toggle.checked ? 'true' : 'false');
+      };
+      toggle.addEventListener('change', schedule);
+      schedule();
+    }
+
+    window.downloadChart = function() {
+      const data = {};
+      document.querySelectorAll('tbody tr').forEach(row => {
+        if (row.style.display === 'none') return;
+        const type = row.querySelector('td:nth-child(3)')?.textContent.trim();
+        if (!type) return;
+        data[type] = (data[type] || 0) + 1;
+      });
+      const entries = Object.entries(data);
+      if (!entries.length) return;
+      const canvas = document.createElement('canvas');
+      const width = 720;
+      const barHeight = 24;
+      const gap = 10;
+      const height = 80 + entries.length * (barHeight + gap);
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext('2d');
+      ctx.fillStyle = '#0f172a';
+      ctx.fillRect(0, 0, width, height);
+      ctx.fillStyle = '#e2e8f0';
+      ctx.font = '16px Inter, sans-serif';
+      ctx.fillText('Violation Mix', 24, 32);
+      const max = Math.max(...entries.map(([, v]) => v));
+      entries.forEach(([label, value], idx) => {
+        const y = 60 + idx * (barHeight + gap);
+        const barWidth = Math.round((value / max) * (width - 240));
+        ctx.fillStyle = '#38bdf8';
+        ctx.fillRect(200, y, barWidth, barHeight);
+        ctx.fillStyle = '#e2e8f0';
+        ctx.fillText(label, 24, y + 17);
+        ctx.fillText(String(value), 210 + barWidth, y + 17);
+      });
+      const link = document.createElement('a');
+      link.download = 'dashboard_violation_mix.png';
+      link.href = canvas.toDataURL('image/png');
+      link.click();
+    }
+
+    populateFilters();
+    updateStats();
+    setupAutoRefresh();
+    document.getElementById('filter-type').addEventListener('change', applyFilters);
+    document.getElementById('filter-vehicle').addEventListener('change', applyFilters);
+    document.getElementById('filter-start').addEventListener('change', applyFilters);
+    document.getElementById('filter-end').addEventListener('change', applyFilters);
+  </script>
+</body>
+
+</html>

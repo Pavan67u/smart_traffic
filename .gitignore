@@ -13,3 +13,13 @@ data/
 Thumbs.db
 .vscode/
 *.log
+
+# Generated runtime artifacts
+web_app/static/uploads/
+web_app/static/results/
+web_app/static/violations.db
+web_app/server.pid
+nohup.out
+
+# Local raw videos used for experimentation
+training/videos/
