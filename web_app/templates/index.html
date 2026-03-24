@@ -634,6 +634,8 @@
       <input type="text" id="calib-new-camera-id" placeholder="new_camera_id" style="display:none;">
       <input type="text" id="calib-desc" placeholder="Camera description (optional)">
       <button type="button" class="button" id="calib-save-btn">Save Calibration</button>
+      <button type="button" class="button" id="calib-export-btn">Export Preset</button>
+      <button type="button" class="button" id="calib-import-btn">Import Preset</button>
       <button type="button" class="button" id="calib-clear-btn">Clear Points</button>
     </div>
 
@@ -647,10 +649,13 @@
         const stopBtn = document.getElementById('calib-stop-btn');
         const laneBtn = document.getElementById('calib-lane-btn');
         const saveBtn = document.getElementById('calib-save-btn');
+        const exportBtn = document.getElementById('calib-export-btn');
+        const importBtn = document.getElementById('calib-import-btn');
         const clearBtn = document.getElementById('calib-clear-btn');
         const saveModeEl = document.getElementById('calib-save-mode');
         const newCameraEl = document.getElementById('calib-new-camera-id');
         const descEl = document.getElementById('calib-desc');
+        const cameraSelect = document.getElementById('camera_select');
 
         let calibMode = null;
         let stopLineY = null;
@@ -806,9 +811,103 @@
                 updateStatus(`Save failed: ${data.error || 'unknown error'}`);
                 return;
               }
-              updateStatus(`Calibration saved for camera '${data.camera_id || cameraId}'.`);
+              const savedId = data.camera_id || cameraId;
+              updateStatus(`Calibration saved for camera '${savedId}'.`);
+              await refreshCameraProfiles(savedId);
             } catch (e) {
               updateStatus('Save failed: network error');
+            }
+          });
+        }
+
+        async function refreshCameraProfiles(selectId = null) {
+          if (!cameraSelect) return;
+          try {
+            const res = await fetch('/api/camera/profiles');
+            const data = await res.json();
+            const profiles = (data && data.profiles) ? data.profiles : {};
+            const ids = Object.keys(profiles).sort();
+            const current = selectId || cameraSelect.value || 'default';
+            cameraSelect.innerHTML = '';
+            ids.forEach(id => {
+              const opt = document.createElement('option');
+              const desc = profiles[id]?.description || id;
+              opt.value = id;
+              opt.textContent = (id === 'default') ? `Default (${desc})` : desc;
+              cameraSelect.appendChild(opt);
+            });
+            if (ids.includes(current)) {
+              cameraSelect.value = current;
+            }
+          } catch (e) {
+            // non-fatal
+          }
+        }
+
+        if (exportBtn) {
+          exportBtn.addEventListener('click', async () => {
+            const cameraId = cameraSelect?.value || 'default';
+            try {
+              const res = await fetch(`/api/camera/preset?camera_id=${encodeURIComponent(cameraId)}`);
+              const data = await res.json();
+              if (!res.ok) {
+                updateStatus(`Export failed: ${data.error || 'unknown error'}`);
+                return;
+              }
+              const payload = JSON.stringify(data, null, 2);
+              try {
+                await navigator.clipboard.writeText(payload);
+                updateStatus(`Preset copied to clipboard for '${cameraId}'.`);
+              } catch (e) {
+                updateStatus(`Preset ready (copy manually from prompt) for '${cameraId}'.`);
+                window.prompt('Copy this preset JSON', payload);
+              }
+            } catch (e) {
+              updateStatus('Export failed: network error');
+            }
+          });
+        }
+
+        if (importBtn) {
+          importBtn.addEventListener('click', async () => {
+            const raw = window.prompt('Paste preset JSON ({"camera_id":"...","config":{...}}):');
+            if (!raw) return;
+            let parsed;
+            try {
+              parsed = JSON.parse(raw);
+            } catch (e) {
+              updateStatus('Import failed: invalid JSON');
+              return;
+            }
+
+            const targetId = window.prompt('Import as camera id (leave empty to use JSON camera_id):', parsed.camera_id || '');
+            const overwrite = window.confirm('If camera id exists, overwrite it? Click OK for yes, Cancel for no.');
+            const payload = {
+              camera_id: (targetId || parsed.camera_id || '').trim(),
+              config: parsed.config,
+              overwrite,
+            };
+
+            if (!payload.camera_id || !payload.config) {
+              updateStatus('Import failed: camera_id/config missing');
+              return;
+            }
+
+            try {
+              const res = await fetch('/api/camera/preset/import', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload),
+              });
+              const data = await res.json();
+              if (!res.ok) {
+                updateStatus(`Import failed: ${data.error || 'unknown error'}`);
+                return;
+              }
+              updateStatus(`Preset imported as '${payload.camera_id}'.`);
+              await refreshCameraProfiles(payload.camera_id);
+            } catch (e) {
+              updateStatus('Import failed: network error');
             }
           });
         }
@@ -821,6 +920,7 @@
         }
 
         window.addEventListener('resize', fitCanvas);
+        refreshCameraProfiles();
 
         let tries = 0;
         function check() {

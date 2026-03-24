@@ -863,6 +863,65 @@ def save_camera_calibration():
 
     return jsonify({'ok': True, 'camera_id': camera_id, 'config': updated})
 
+
+@app.route('/api/camera/profiles')
+def camera_profiles():
+    profiles = {}
+    for cam_id, cfg in (CAMERA_CONFIG or {}).items():
+        profiles[cam_id] = {
+            'description': cfg.get('description', cam_id),
+            'reference_resolution': cfg.get('reference_resolution'),
+            'stop_line_y': cfg.get('stop_line_y'),
+            'lane_line': cfg.get('lane_line'),
+        }
+    return jsonify({'profiles': profiles})
+
+
+@app.route('/api/camera/preset')
+def camera_preset():
+    camera_id = request.args.get('camera_id', 'default')
+    cfg = (CAMERA_CONFIG or {}).get(camera_id)
+    if not cfg:
+        return jsonify({'error': f'camera_id not found: {camera_id}'}), 404
+    return jsonify({'camera_id': camera_id, 'config': cfg})
+
+
+@app.route('/api/camera/preset/import', methods=['POST'])
+def import_camera_preset():
+    data = request.json or {}
+    camera_id = (data.get('camera_id') or '').strip()
+    config = data.get('config')
+    overwrite = bool(data.get('overwrite', False))
+
+    if not camera_id:
+        return jsonify({'error': 'camera_id is required'}), 400
+    if not isinstance(config, dict):
+        return jsonify({'error': 'config must be an object'}), 400
+
+    cfg_path = APP_ROOT / 'config' / 'cameras.json'
+    try:
+        if cfg_path.exists():
+            camera_cfg = json.loads(cfg_path.read_text())
+        else:
+            camera_cfg = {}
+    except Exception as e:
+        return jsonify({'error': f'Failed to read camera config: {e}'}), 500
+
+    if (camera_id in camera_cfg) and (not overwrite):
+        return jsonify({'error': f'camera_id already exists: {camera_id}. Set overwrite=true to replace.'}), 409
+
+    camera_cfg[camera_id] = config
+    try:
+        cfg_path.parent.mkdir(parents=True, exist_ok=True)
+        cfg_path.write_text(json.dumps(camera_cfg, indent=2))
+    except Exception as e:
+        return jsonify({'error': f'Failed to write camera config: {e}'}), 500
+
+    if reload_camera_config is not None:
+        reload_camera_config()
+
+    return jsonify({'ok': True, 'camera_id': camera_id})
+
 if __name__ == '__main__':
     # Use 0.0.0.0 for Docker visibility, but 5050 to avoid MacOS AirPlay conflict
     app.run(host='0.0.0.0', port=5050, debug=True)
