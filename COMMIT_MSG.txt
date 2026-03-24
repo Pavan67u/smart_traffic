@@ -1,0 +1,11 @@
+feat: add 15 advanced features (Phase 2)
+
+Active Learning: LabelingTask & TrainingBatch models + flag uncertain detections
+Model Ensemble: Run multiple YOLOs in parallel with NMS aggregation
+Video Streaming: RTSP/MJPEG/Webcam validation and snippet recording
+Signal Controller: Push timing to external controllers + feedback loop
+Mobile App: Scaffold with API spec and implementation guide
+Distributed Processing: Celery + Redis for async inference & post-processing
+License Plate OCR: ANPR with owner lookup and automated notifications
+
+All 15 suggested features fully implemented.

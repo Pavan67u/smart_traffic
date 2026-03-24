@@ -1720,6 +1720,203 @@ def gdpr_export_data():
     return jsonify(data)
 
 
+# ============================================================================
+# Active Learning & Video Streaming Routes
+# ============================================================================
+
+from web_app.utils.ml_advanced import ModelEnsemble, VideoStreamWriter, flag_uncertain_detections
+
+@app.route('/api/active_learning/pending_labels')
+@require_login
+def get_pending_labels():
+    """Get violations flagged for human labeling."""
+    from web_app.models_ml import LabelingTask
+    
+    pending = LabelingTask.query.filter_by(status='pending').order_by(
+        LabelingTask.created_at.desc()
+    ).limit(50).all()
+    
+    return jsonify([task.to_dict() for task in pending])
+
+
+@app.route('/api/active_learning/submit_label', methods=['POST'])
+@require_permission('update_status')
+def submit_label():
+    """Submit human label for uncertain detection."""
+    from web_app.models_ml import LabelingTask, TrainingBatch
+    
+    data = request.json
+    task_id = data.get('task_id')
+    human_label = data.get('label')
+    
+    task = LabelingTask.query.get(task_id)
+    if not task:
+        return jsonify({'error': 'Task not found'}), 404
+    
+    task.human_label = human_label
+    task.is_correct = (human_label == task.predicted_label)
+    task.labeled_at = datetime.now(timezone.utc)
+    task.labeled_by = session.get('user_id')
+    task.status = 'labeled'
+    
+    db.session.commit()
+    audit_action('submit_label', resource_type='labeling_task', resource_id=task_id,
+                details={'predicted': task.predicted_label, 'actual': human_label})
+    
+    return jsonify({'ok': True, 'task_id': task_id})
+
+
+@app.route('/api/video_stream/validate', methods=['POST'])
+@require_permission('manage_profiles')
+def validate_stream():
+    """Validate and get info about a video stream (RTSP/MJPEG/Webcam)."""
+    data = request.json
+    stream_url = data.get('stream_url')
+    
+    if not stream_url:
+        return jsonify({'error': 'stream_url required'}), 400
+    
+    stream_type = VideoStreamWriter.validate_stream_url(stream_url)
+    if not stream_type:
+        return jsonify({'error': 'Invalid stream URL format'}), 400
+    
+    info = VideoStreamWriter.get_stream_info(stream_url)
+    if not info:
+        return jsonify({'error': 'Unable to connect to stream'}), 500
+    
+    audit_action('validate_stream', resource_type='video_stream', details={'url': stream_url})
+    
+    return jsonify({
+        'valid': True,
+        'stream_type': VideoStreamWriter.STREAM_TYPES.get(stream_type),
+        'info': info
+    })
+
+
+@app.route('/api/video_stream/record_snippet', methods=['POST'])
+@require_permission('manage_profiles')
+def record_stream_snippet():
+    """Record a short test snippet from a stream."""
+    data = request.json
+    stream_url = data.get('stream_url')
+    duration = data.get('duration_seconds', 10)
+    
+    if not stream_url:
+        return jsonify({'error': 'stream_url required'}), 400
+    
+    run_id = str(uuid.uuid4())[:8]
+    snippet_path = RESULT_DIR / run_id / 'stream_snippet.mp4'
+    snippet_path.parent.mkdir(parents=True, exist_ok=True)
+    
+    success = VideoStreamWriter.record_stream_snippet(stream_url, str(snippet_path), duration)
+    
+    if success:
+        audit_action('record_stream', resource_type='video_stream', details={'duration': duration})
+        return jsonify({
+            'ok': True,
+            'snippet_path': str(snippet_path),
+            'run_id': run_id,
+            'size_mb': snippet_path.stat().st_size / 1024 / 1024
+        })
+    return jsonify({'error': 'Failed to record stream'}), 500
+
+
+# ============================================================================
+# Signal Controller Integration Routes
+# ============================================================================
+
+@app.route('/api/signal/controller/connect', methods=['POST'])
+@require_role('admin')
+def signal_controller_connect():
+    """Connect to external traffic signal controller API."""
+    data = request.json
+    controller_url = data.get('controller_url')  # e.g., "http://192.168.1.100:8080"
+    camera_id = data.get('camera_id', 'default')
+    
+    # Store controller config
+    config = {
+        'controller_url': controller_url,
+        'active': True,
+        'last_sync': datetime.now(timezone.utc).isoformat(),
+        'version': '1.0'
+    }
+    
+    cfg_path = APP_ROOT / 'config' / 'signal_controllers.json'
+    cfg_path.parent.mkdir(parents=True, exist_ok=True)
+    
+    try:
+        existing = json.loads(cfg_path.read_text()) if cfg_path.exists() else {}
+    except:
+        existing = {}
+    
+    existing[camera_id] = config
+    cfg_path.write_text(json.dumps(existing, indent=2))
+    
+    audit_action('connect_signal_controller', resource_type='signal_controller',
+                details={'controller_url': controller_url, 'camera_id': camera_id})
+    
+    return jsonify({'ok': True, 'controller_url': controller_url})
+
+
+@app.route('/api/signal/controller/apply', methods=['POST'])
+@require_permission('manage_profiles')
+def signal_controller_apply():
+    """Push suggested signal timing to physical traffic controller."""
+    data = request.json
+    camera_id = data.get('camera_id', 'default')
+    signal_profile = data.get('profile')  # e.g., {'RED': 30, 'YELLOW': 5, 'GREEN': 35}
+    
+    # Load controller config
+    cfg_path = APP_ROOT / 'config' / 'signal_controllers.json'
+    if not cfg_path.exists():
+        return jsonify({'error': 'No signal controller configured'}), 404
+    
+    controllers = json.loads(cfg_path.read_text())
+    if camera_id not in controllers:
+        return jsonify({'error': f'No controller for camera {camera_id}'}), 404
+    
+    controller_url = controllers[camera_id]['controller_url']
+    
+    # Send HTTP POST to actual signal controller
+    try:
+        import requests
+        response = requests.post(
+            f"{controller_url}/api/signal/apply",
+            json={'profile': signal_profile, 'camera_id': camera_id},
+            timeout=5
+        )
+        
+        if response.status_code == 200:
+            audit_action('apply_signal_profile', resource_type='signal_controller',
+                        resource_id=None, details={'camera_id': camera_id, 'profile': signal_profile})
+            return jsonify({'ok': True, 'result': response.json()})
+        else:
+            return jsonify({'error': response.text}), response.status_code
+    except Exception as e:
+        return jsonify({'error': f'Connection error: {str(e)}'}), 500
+
+
+@app.route('/api/signal/controller/feedback', methods=['POST'])
+@require_login
+def signal_controller_feedback():
+    """Receive feedback from signal controller about effectiveness."""
+    data = request.json
+    camera_id = data.get('camera_id', 'default')
+    before_violation_count = data.get('before_violations', 0)
+    after_violation_count = data.get('after_violations', 0)
+    
+    effectiveness = (before_violation_count - after_violation_count) / max(before_violation_count, 1) * 100
+    
+    audit_action('signal_feedback', resource_type='signal_controller', resource_id=None,
+                details={'camera_id': camera_id, 'effectiveness': effectiveness})
+    
+    return jsonify({
+        'ok': True,
+        'effectiveness_percent': effectiveness,
+        'improvement': 'POSITIVE' if effectiveness > 0 else 'NEUTRAL'
+    })
+
+
 if __name__ == '__main__':
     # Use 0.0.0.0 for Docker visibility, but 5050 to avoid MacOS AirPlay conflict
     app.run(host='0.0.0.0', port=5050, debug=True)

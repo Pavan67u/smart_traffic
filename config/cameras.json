@@ -97,41 +97,5 @@
       ]
     ],
     "description": "Lab Camera 01"
-  },
-  "lab_cam_imported": {
-    "description": "Imported profile",
-    "reference_resolution": [
-      1280,
-      720
-    ],
-    "stop_line_y": 300,
-    "stop_zone": [
-      [
-        0,
-        300
-      ],
-      [
-        1280,
-        300
-      ],
-      [
-        1280,
-        720
-      ],
-      [
-        0,
-        720
-      ]
-    ],
-    "lane_line": [
-      [
-        640,
-        0
-      ],
-      [
-        640,
-        720
-      ]
-    ]
   }
 }
