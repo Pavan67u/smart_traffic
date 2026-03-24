@@ -10,6 +10,7 @@ import csv
 from fpdf import FPDF  # type: ignore
 from web_app.models import db, Violation
 from typing import Any, Optional
+import threading
 
 # Type aliases for clarity
 YOLO_Model = Any  # Ultralytics YOLO model
@@ -109,6 +110,12 @@ except Exception:
 
 
 DRAW_RULE_OVERLAY = os.environ.get('DRAW_RULE_OVERLAY', '1').strip() not in {'0', 'false', 'False'}
+
+# Signal timing suggestion smoothing and anti-flapping controls.
+SIGNAL_POLICY_SMOOTHING_ALPHA = float(os.environ.get('SIGNAL_POLICY_SMOOTHING_ALPHA', '0.35'))
+SIGNAL_POLICY_HOLD_SECONDS = int(os.environ.get('SIGNAL_POLICY_HOLD_SECONDS', '45'))
+SIGNAL_POLICY_STATE = {}
+SIGNAL_POLICY_LOCK = threading.Lock()
 
 
 def draw_rule_overlay(frame, camera_id='default'):
@@ -791,21 +798,59 @@ def _aggregate_runtime_metrics(run_id=None, camera_id=None):
     return agg
 
 
-def _build_signal_timing_suggestion(metrics):
+def _build_signal_timing_suggestion(metrics, scope_key='global', force_profile_change=False):
     frames = max(int(metrics.get('frames_processed', 0) or 0), 1)
-    avg_tracks = float(metrics.get('tracks_emitted', 0) or 0) / frames
-    violation_rate = float(metrics.get('violations_emitted', 0) or 0) / frames
+    avg_tracks_raw = float(metrics.get('tracks_emitted', 0) or 0) / frames
+    violation_rate_raw = float(metrics.get('violations_emitted', 0) or 0) / frames
     fallback_ratio = float(metrics.get('frames_with_fallback_tracks', 0) or 0) / frames
 
-    if avg_tracks >= 6.0 or violation_rate >= 0.08:
-        profile = 'high_congestion'
-        durations = {'RED': 8, 'GREEN': 20, 'YELLOW': 3}
-    elif avg_tracks >= 3.0 or violation_rate >= 0.03:
-        profile = 'medium_congestion'
-        durations = {'RED': 10, 'GREEN': 15, 'YELLOW': 3}
-    else:
-        profile = 'low_congestion'
-        durations = {'RED': 14, 'GREEN': 10, 'YELLOW': 3}
+    alpha = min(max(SIGNAL_POLICY_SMOOTHING_ALPHA, 0.05), 1.0)
+    now_ts = time.time()
+
+    with SIGNAL_POLICY_LOCK:
+        prev = SIGNAL_POLICY_STATE.get(scope_key, {})
+        prev_avg = float(prev.get('ewma_avg_tracks', avg_tracks_raw))
+        prev_vrate = float(prev.get('ewma_violation_rate', violation_rate_raw))
+
+        avg_tracks = (alpha * avg_tracks_raw) + ((1.0 - alpha) * prev_avg)
+        violation_rate = (alpha * violation_rate_raw) + ((1.0 - alpha) * prev_vrate)
+
+        # Choose candidate profile from smoothed metrics.
+        if avg_tracks >= 6.0 or violation_rate >= 0.08:
+            candidate_profile = 'high_congestion'
+            candidate_durations = {'RED': 8, 'GREEN': 20, 'YELLOW': 3}
+        elif avg_tracks >= 3.0 or violation_rate >= 0.03:
+            candidate_profile = 'medium_congestion'
+            candidate_durations = {'RED': 10, 'GREEN': 15, 'YELLOW': 3}
+        else:
+            candidate_profile = 'low_congestion'
+            candidate_durations = {'RED': 14, 'GREEN': 10, 'YELLOW': 3}
+
+        last_profile = prev.get('profile')
+        last_change_ts = float(prev.get('last_change_ts', 0.0))
+        can_change = force_profile_change or (now_ts - last_change_ts >= SIGNAL_POLICY_HOLD_SECONDS)
+
+        hold_active = False
+        hold_remaining_seconds = 0
+        if last_profile and candidate_profile != last_profile and not can_change:
+            # Freeze profile until minimum hold time has passed.
+            profile = last_profile
+            durations = prev.get('durations', candidate_durations)
+            hold_active = True
+            hold_remaining_seconds = max(0, int(SIGNAL_POLICY_HOLD_SECONDS - (now_ts - last_change_ts)))
+        else:
+            profile = candidate_profile
+            durations = candidate_durations
+            if not last_profile or profile != last_profile:
+                last_change_ts = now_ts
+
+        SIGNAL_POLICY_STATE[scope_key] = {
+            'profile': profile,
+            'durations': durations,
+            'ewma_avg_tracks': avg_tracks,
+            'ewma_violation_rate': violation_rate,
+            'last_change_ts': last_change_ts,
+        }
 
     confidence = 'high'
     if fallback_ratio >= 0.7:
@@ -814,8 +859,10 @@ def _build_signal_timing_suggestion(metrics):
         confidence = 'low'
 
     rationale = [
-        f"avg_tracks_per_frame={avg_tracks:.2f}",
-        f"violation_rate={violation_rate:.3f}",
+        f"avg_tracks_per_frame_raw={avg_tracks_raw:.2f}",
+        f"avg_tracks_per_frame_ewma={avg_tracks:.2f}",
+        f"violation_rate_raw={violation_rate_raw:.3f}",
+        f"violation_rate_ewma={violation_rate:.3f}",
         f"fallback_ratio={fallback_ratio:.2f}",
         f"sample_frames={frames}",
     ]
@@ -826,6 +873,12 @@ def _build_signal_timing_suggestion(metrics):
         'recommended_mode': 'timer',
         'durations': durations,
         'rationale': rationale,
+        'stability': {
+            'smoothing_alpha': alpha,
+            'hold_seconds': SIGNAL_POLICY_HOLD_SECONDS,
+            'hold_active': hold_active,
+            'hold_remaining_seconds': hold_remaining_seconds,
+        },
         'metrics_used': {
             'frames_processed': frames,
             'tracks_emitted': int(metrics.get('tracks_emitted', 0) or 0),
@@ -840,7 +893,8 @@ def signal_suggestion():
     run_id = request.args.get('run_id')
     camera_id = request.args.get('camera_id')
     metrics = _aggregate_runtime_metrics(run_id=run_id, camera_id=camera_id)
-    suggestion = _build_signal_timing_suggestion(metrics)
+    scope_key = f"{camera_id or 'global'}::{run_id or 'all'}"
+    suggestion = _build_signal_timing_suggestion(metrics, scope_key=scope_key, force_profile_change=False)
     return jsonify({
         'scope': {
             'run_id': run_id,
@@ -860,9 +914,11 @@ def apply_signal_suggestion():
     run_id = data.get('run_id')
     camera_id = data.get('camera_id')
     requested_mode = (data.get('mode') or 'timer').strip().lower()
+    force_change = bool(data.get('force'))
 
     metrics = _aggregate_runtime_metrics(run_id=run_id, camera_id=camera_id)
-    suggestion = _build_signal_timing_suggestion(metrics)
+    scope_key = f"{camera_id or 'global'}::{run_id or 'all'}"
+    suggestion = _build_signal_timing_suggestion(metrics, scope_key=scope_key, force_profile_change=force_change)
     durations = suggestion.get('durations', {})
 
     ok = SIGNAL_MANAGER.set_durations(
