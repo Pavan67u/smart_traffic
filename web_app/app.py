@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request, send_from_directory, redirect, url_for, make_response, jsonify
+from flask import Flask, render_template, request, send_from_directory, redirect, url_for, make_response, jsonify, session
 from pathlib import Path
 import uuid
 import os
@@ -11,7 +11,8 @@ import csv
 import smtplib
 from fpdf import FPDF  # type: ignore
 from email.message import EmailMessage
-from web_app.models import db, Violation
+from web_app.models import db, Violation, User, AuditLog
+from web_app.utils.auth import require_login, require_permission, require_role, audit_action, init_default_users
 from typing import Any, Optional
 import threading
 
@@ -37,10 +38,12 @@ app = Flask(__name__, template_folder=str(APP_ROOT / 'web_app' / 'templates'))
 db_path = APP_ROOT / 'web_app' / 'static' / 'violations.db'
 app.config['SQLALCHEMY_DATABASE_URI'] = f'sqlite:///{db_path}'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+app.secret_key = os.environ.get('SECRET_KEY', 'dev-secret-key-change-in-production')
 db.init_app(app)
 
 with app.app_context():
     db.create_all()
+    init_default_users(app)
 
 
 # Load model at startup. Allow overriding via the MODEL_PATH env var.
@@ -471,6 +474,114 @@ def process_video(input_path, output_path, run_id, camera_id='default'):
     cap.release()
     out.release()
     return all_violations
+
+
+# ============================================================================
+# Authentication Routes (RBAC System)
+# ============================================================================
+
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    """User login endpoint."""
+    if request.method == 'GET':
+        if 'user_id' in session:
+            return redirect('/')
+        return render_template('login.html')
+    
+    username = request.form.get('username', '').strip()
+    password = request.form.get('password', '')
+    
+    user = User.query.filter_by(username=username).first()
+    if user and user.is_active and user.check_password(password):
+        session['user_id'] = user.id
+        session['username'] = user.username
+        session['role'] = user.role
+        user.last_login = datetime.now(timezone.utc)
+        db.session.commit()
+        audit_action('login', resource_type='user', resource_id=user.id)
+        return redirect('/')
+    
+    audit_action('login_failed', resource_type='user', details={'username': username})
+    return render_template('login.html', error='Invalid credentials')
+
+
+@app.route('/logout')
+def logout():
+    """User logout endpoint."""
+    if 'user_id' in session:
+        audit_action('logout', resource_type='user', resource_id=session.get('user_id'))
+    session.clear()
+    return redirect('/login')
+
+
+@app.route('/register', methods=['GET', 'POST'])
+def register():
+    """User registration (admin-only)."""
+    # Check if admin is registering users
+    if 'user_id' not in session:
+        return redirect('/login')
+    
+    current_user = User.query.get(session['user_id'])
+    if current_user.role != 'admin':
+        return jsonify({'error': 'Only admins can register users'}), 403
+    
+    if request.method == 'GET':
+        return render_template('register.html')
+    
+    username = request.form.get('username', '').strip()
+    email = request.form.get('email', '').strip()
+    password = request.form.get('password', '')
+    role = request.form.get('role', 'viewer')
+    
+    if not username or not email or not password:
+        return render_template('register.html', error='All fields required')
+    
+    if User.query.filter_by(username=username).first():
+        return render_template('register.html', error='Username already exists')
+    
+    if User.query.filter_by(email=email).first():
+        return render_template('register.html', error='Email already exists')
+    
+    new_user = User(username=username, email=email, role=role, is_active=True)
+    new_user.set_password(password)
+    db.session.add(new_user)
+    db.session.commit()
+    
+    audit_action('user_created', resource_type='user', resource_id=new_user.id, 
+                details={'username': username, 'role': role})
+    
+    return render_template('register.html', success=f'User {username} created')
+
+
+@app.route('/api/users')
+@require_role('admin')
+def get_users():
+    """List all users (admin only)."""
+    users = User.query.all()
+    audit_action('list_users', resource_type='user')
+    return jsonify([u.to_dict() for u in users])
+
+
+@app.route('/api/audit_logs')
+@require_role('admin')
+def get_audit_logs():
+    """List audit logs (admin only)."""
+    limit = request.args.get('limit', 100, type=int)
+    logs = AuditLog.query.order_by(AuditLog.timestamp.desc()).limit(limit).all()
+    return jsonify([log.to_dict() for log in logs])
+
+
+@app.route('/api/user/profile')
+@require_login
+def get_user_profile():
+    """Get current user profile."""
+    user = User.query.get(session['user_id'])
+    if not user:
+        return jsonify({'error': 'User not found'}), 404
+    return jsonify(user.to_dict())
+
+
+from datetime import datetime, timezone
 
 @app.route('/')
 def index():
@@ -1488,6 +1599,126 @@ def import_camera_preset():
         reload_camera_config()
 
     return jsonify({'ok': True, 'camera_id': camera_id})
+
+
+# ============================================================================
+# Analytics, Monitoring, and Advanced Filtering Routes
+# ============================================================================
+
+from web_app.utils.analytics import (
+    get_analytics_summary, get_camera_health, get_heatmap_data,
+    build_filter_query, get_violation_trends, predict_resource_allocation,
+    cleanup_old_violations, export_user_data
+)
+
+@app.route('/api/analytics/summary')
+@require_login
+def analytics_summary():
+    """Get comprehensive analytics."""
+    days = request.args.get('days', 7, type=int)
+    summary = get_analytics_summary(days=days)
+    audit_action('list_analytics', resource_type='analytics', details={'days': days})
+    return jsonify(summary)
+
+
+@app.route('/api/analytics/camera_health')
+@require_login
+def analytics_camera_health():
+    """Get camera health metrics."""
+    health = get_camera_health()
+    audit_action('view_camera_health', resource_type='camera')
+    return jsonify(health)
+
+
+@app.route('/api/analytics/heatmap')
+@require_login
+def analytics_heatmap():
+    """Get violation heatmap by time."""
+    days = request.args.get('days', 7, type=int)
+    heatmap = get_heatmap_data(limit_days=days)
+    return jsonify(heatmap)
+
+
+@app.route('/api/analytics/trends')
+@require_login
+def analytics_trends():
+    """Get violation trends and predictions."""
+    days = request.args.get('days', 30, type=int)
+    trends = get_violation_trends(days=days)
+    return jsonify(trends)
+
+
+@app.route('/api/analytics/resource_allocation')
+@require_permission('view_violations')
+def analytics_resource_allocation():
+    """Get enforcement resource allocation suggestions."""
+    days = request.args.get('days', 7, type=int)
+    recommendations = predict_resource_allocation(days=days)
+    return jsonify(recommendations)
+
+
+@app.route('/api/violations/search')
+@require_login
+def search_violations():
+    """Advanced search with multiple filters."""
+    filters = request.args.to_dict()
+    page = request.args.get('page', 1, type=int)
+    per_page = request.args.get('per_page', 50, type=int)
+    sort_by = request.args.get('sort_by', 'timestamp')
+    sort_desc = request.args.get('sort_desc', 'true').lower() == 'true'
+    
+    query = build_filter_query(filters)
+    
+    # Sorting
+    if sort_by == 'timestamp':
+        col = Violation.timestamp
+    elif sort_by == 'priority_score':
+        col = Violation.priority_score
+    elif sort_by == 'confidence':
+        col = Violation.confidence
+    else:
+        col = Violation.timestamp
+    
+    if sort_desc:
+        query = query.order_by(col.desc())
+    else:
+        query = query.order_by(col.asc())
+    
+    # Pagination
+    paginated = query.paginate(page=page, per_page=per_page)
+    
+    audit_action('search_violations', resource_type='violation', 
+                details={'filter_count': len(filters), 'page': page})
+    
+    return jsonify({
+        'violations': [v.to_dict() for v in paginated.items],
+        'total': paginated.total,
+        'pages': paginated.pages,
+        'current_page': page
+    })
+
+
+@app.route('/api/maintenance/cleanup', methods=['POST'])
+@require_role('admin')
+def maintenance_cleanup():
+    """Clean up old violations (admin only)."""
+    days = request.json.get('days', 90) if request.is_json else 90
+    deleted = cleanup_old_violations(days=days)
+    audit_action('cleanup_old_violations', resource_type='maintenance', 
+                details={'days': days, 'deleted_count': deleted})
+    return jsonify({'deleted_count': deleted})
+
+
+@app.route('/api/gdpr/export_data')
+@require_login
+def gdpr_export_data():
+    """Export user's personal data (GDPR compliance)."""
+    user_id = session.get('user_id')
+    data = export_user_data(user_id)
+    audit_action('export_personal_data', resource_type='gdpr', resource_id=user_id)
+    
+    return jsonify(data)
+
 
 if __name__ == '__main__':
     # Use 0.0.0.0 for Docker visibility, but 5050 to avoid MacOS AirPlay conflict
