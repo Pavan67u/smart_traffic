@@ -553,6 +553,11 @@ def dashboard():
     violations = Violation.query.order_by(Violation.timestamp.desc()).all()
     return render_template('dashboard.html', violations=violations)
 
+
+@app.route('/calibration')
+def calibration_manager():
+    return render_template('calibration_manager.html')
+
 @app.route('/dashboard/update/<int:vid>', methods=['POST'])
 def update_status(vid):
     v = Violation.query.get_or_404(vid)
@@ -779,6 +784,45 @@ def metrics():
     return jsonify(get_runtime_metrics())
 
 
+@app.route('/api/metrics/summary')
+def metrics_summary():
+    from datetime import datetime, timedelta, timezone
+
+    def _as_utc(dt):
+        if not dt:
+            return None
+        if dt.tzinfo is None:
+            return dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc)
+
+    now = datetime.now(timezone.utc)
+    since_24h = now - timedelta(hours=24)
+    all_violations = Violation.query.order_by(Violation.timestamp.desc()).all()
+    recent_24h = [v for v in all_violations if ((ts := _as_utc(v.timestamp)) and ts >= since_24h)]
+
+    by_type = {}
+    by_status = {}
+    for v in all_violations:
+        by_type[v.violation_type] = by_type.get(v.violation_type, 0) + 1
+        by_status[v.status] = by_status.get(v.status, 0) + 1
+
+    runtime = get_runtime_metrics() if get_runtime_metrics is not None else {}
+    runtime_totals = {
+        'active_runs': len(runtime),
+        'frames_processed': sum((m.get('frames_processed', 0) for m in runtime.values())) if isinstance(runtime, dict) else 0,
+        'tracks_emitted': sum((m.get('tracks_emitted', 0) for m in runtime.values())) if isinstance(runtime, dict) else 0,
+        'violations_emitted': sum((m.get('violations_emitted', 0) for m in runtime.values())) if isinstance(runtime, dict) else 0,
+    }
+
+    return jsonify({
+        'total_violations': len(all_violations),
+        'violations_last_24h': len(recent_24h),
+        'by_type': by_type,
+        'by_status': by_status,
+        'runtime': runtime_totals,
+    })
+
+
 @app.route('/api/debug/rules')
 def debug_rules():
     if get_rule_geometry is None:
@@ -875,6 +919,38 @@ def camera_profiles():
             'lane_line': cfg.get('lane_line'),
         }
     return jsonify({'profiles': profiles})
+
+
+@app.route('/api/camera/profile/<camera_id>', methods=['DELETE'])
+def delete_camera_profile(camera_id):
+    camera_id = (camera_id or '').strip()
+    if not camera_id:
+        return jsonify({'error': 'camera_id is required'}), 400
+    if camera_id == 'default':
+        return jsonify({'error': 'default profile cannot be deleted'}), 400
+
+    cfg_path = APP_ROOT / 'config' / 'cameras.json'
+    try:
+        if cfg_path.exists():
+            camera_cfg = json.loads(cfg_path.read_text())
+        else:
+            camera_cfg = {}
+    except Exception as e:
+        return jsonify({'error': f'Failed to read camera config: {e}'}), 500
+
+    if camera_id not in camera_cfg:
+        return jsonify({'error': f'camera_id not found: {camera_id}'}), 404
+
+    del camera_cfg[camera_id]
+    try:
+        cfg_path.write_text(json.dumps(camera_cfg, indent=2))
+    except Exception as e:
+        return jsonify({'error': f'Failed to write camera config: {e}'}), 500
+
+    if reload_camera_config is not None:
+        reload_camera_config()
+
+    return jsonify({'ok': True, 'deleted': camera_id})
 
 
 @app.route('/api/camera/preset')

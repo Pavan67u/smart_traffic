@@ -1,0 +1,246 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Calibration Manager</title>
+  <style>
+    body {
+      margin: 0;
+      font-family: "Inter", "Segoe UI", system-ui, -apple-system, sans-serif;
+      background: #0f172a;
+      color: #e2e8f0;
+    }
+    .wrap {
+      max-width: 1100px;
+      margin: 24px auto;
+      padding: 0 16px 40px;
+    }
+    .card {
+      background: #111827;
+      border: 1px solid #1f2937;
+      border-radius: 12px;
+      padding: 16px;
+      margin-bottom: 14px;
+    }
+    h1, h2 {
+      margin: 0 0 12px;
+    }
+    .nav {
+      display: flex;
+      gap: 10px;
+      margin-bottom: 14px;
+    }
+    .nav a {
+      color: #38bdf8;
+      text-decoration: none;
+      font-weight: 600;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 14px;
+    }
+    th, td {
+      border-bottom: 1px solid #1f2937;
+      padding: 8px;
+      text-align: left;
+      vertical-align: top;
+    }
+    button, input, textarea {
+      border-radius: 8px;
+      border: 1px solid #334155;
+      background: #0b1220;
+      color: #e2e8f0;
+      padding: 8px 10px;
+    }
+    button {
+      cursor: pointer;
+      font-weight: 600;
+    }
+    .row {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+    .mono {
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 12px;
+      white-space: pre-wrap;
+      background: #020617;
+      border: 1px solid #1f2937;
+      border-radius: 8px;
+      padding: 10px;
+      max-height: 280px;
+      overflow: auto;
+    }
+    .muted { color: #94a3b8; font-size: 12px; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="nav">
+      <a href="/">Inference</a>
+      <a href="/dashboard">Dashboard</a>
+      <a href="/calibration">Calibration Manager</a>
+    </div>
+
+    <div class="card">
+      <h1>Calibration Manager</h1>
+      <p class="muted">Manage camera profiles, export/import presets, and monitor system summary.</p>
+    </div>
+
+    <div class="card">
+      <h2>Live Summary</h2>
+      <div id="summary" class="mono">Loading...</div>
+    </div>
+
+    <div class="card">
+      <h2>Camera Profiles</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Camera ID</th>
+            <th>Description</th>
+            <th>Resolution</th>
+            <th>Stop Y</th>
+            <th>Lane Line</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody id="profiles-body"></tbody>
+      </table>
+    </div>
+
+    <div class="card">
+      <h2>Preset Export</h2>
+      <div class="row">
+        <input id="export-camera-id" placeholder="camera_id" value="default">
+        <button id="export-btn">Export</button>
+      </div>
+      <div id="export-output" class="mono" style="margin-top:10px;">No export yet.</div>
+    </div>
+
+    <div class="card">
+      <h2>Preset Import</h2>
+      <div class="row">
+        <input id="import-camera-id" placeholder="target camera_id">
+        <label><input type="checkbox" id="import-overwrite"> Overwrite if exists</label>
+      </div>
+      <textarea id="import-config" rows="8" style="width:100%; margin-top:8px;" placeholder='Paste JSON config object only, e.g. {"reference_resolution":[1280,720],...}'></textarea>
+      <div class="row" style="margin-top:8px;">
+        <button id="import-btn">Import Preset</button>
+      </div>
+      <div id="import-status" class="muted" style="margin-top:8px;"></div>
+    </div>
+  </div>
+
+  <script>
+    const profilesBody = document.getElementById('profiles-body');
+    const summaryEl = document.getElementById('summary');
+
+    function escapeHtml(s) {
+      return String(s)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
+    }
+
+    async function loadProfiles() {
+      const res = await fetch('/api/camera/profiles');
+      const data = await res.json();
+      const profiles = (data && data.profiles) ? data.profiles : {};
+      const ids = Object.keys(profiles).sort();
+      profilesBody.innerHTML = ids.map(id => {
+        const p = profiles[id] || {};
+        const rr = p.reference_resolution ? p.reference_resolution.join('x') : '-';
+        const ll = p.lane_line ? JSON.stringify(p.lane_line) : '-';
+        return `<tr>
+          <td><strong>${escapeHtml(id)}</strong></td>
+          <td>${escapeHtml(p.description || id)}</td>
+          <td>${escapeHtml(rr)}</td>
+          <td>${escapeHtml(p.stop_line_y ?? '-')}</td>
+          <td class="muted">${escapeHtml(ll)}</td>
+          <td>
+            <button onclick="fillExport('${escapeHtml(id)}')">Use for Export</button>
+            ${id !== 'default' ? `<button onclick="deleteProfile('${escapeHtml(id)}')">Delete</button>` : ''}
+          </td>
+        </tr>`;
+      }).join('');
+    }
+
+    async function loadSummary() {
+      const res = await fetch('/api/metrics/summary');
+      const data = await res.json();
+      summaryEl.textContent = JSON.stringify(data, null, 2);
+    }
+
+    window.fillExport = function(id) {
+      document.getElementById('export-camera-id').value = id;
+    }
+
+    window.deleteProfile = async function(id) {
+      if (!confirm(`Delete camera profile '${id}'?`)) return;
+      const res = await fetch(`/api/camera/profile/${encodeURIComponent(id)}`, { method: 'DELETE' });
+      const data = await res.json();
+      if (!res.ok) {
+        alert(data.error || 'Delete failed');
+        return;
+      }
+      await loadProfiles();
+    }
+
+    document.getElementById('export-btn').addEventListener('click', async () => {
+      const id = document.getElementById('export-camera-id').value.trim();
+      const out = document.getElementById('export-output');
+      const res = await fetch(`/api/camera/preset?camera_id=${encodeURIComponent(id)}`);
+      const data = await res.json();
+      if (!res.ok) {
+        out.textContent = data.error || 'Export failed';
+        return;
+      }
+      out.textContent = JSON.stringify(data, null, 2);
+    });
+
+    document.getElementById('import-btn').addEventListener('click', async () => {
+      const status = document.getElementById('import-status');
+      const cameraId = document.getElementById('import-camera-id').value.trim();
+      const overwrite = document.getElementById('import-overwrite').checked;
+      const cfgRaw = document.getElementById('import-config').value.trim();
+
+      if (!cameraId || !cfgRaw) {
+        status.textContent = 'camera_id and config are required';
+        return;
+      }
+
+      let config;
+      try {
+        config = JSON.parse(cfgRaw);
+      } catch (e) {
+        status.textContent = 'Invalid JSON config';
+        return;
+      }
+
+      const res = await fetch('/api/camera/preset/import', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ camera_id: cameraId, config, overwrite }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        status.textContent = data.error || 'Import failed';
+        return;
+      }
+      status.textContent = `Imported: ${data.camera_id}`;
+      await loadProfiles();
+    });
+
+    loadProfiles();
+    loadSummary();
+    setInterval(loadSummary, 5000);
+  </script>
+</body>
+</html>
