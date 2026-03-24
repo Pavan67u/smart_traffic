@@ -763,6 +763,125 @@ def signal_set():
         
     return jsonify(SIGNAL_MANAGER.get_status())
 
+
+def _aggregate_runtime_metrics(run_id=None, camera_id=None):
+    if get_runtime_metrics is None:
+        return {}
+    if run_id and camera_id:
+        metrics = get_runtime_metrics(run_id=run_id, camera_id=camera_id)
+        return metrics if isinstance(metrics, dict) else {}
+
+    all_metrics = get_runtime_metrics()
+    if not isinstance(all_metrics, dict):
+        return {}
+
+    agg = {
+        'frames_processed': 0,
+        'detections_seen': 0,
+        'tracks_emitted': 0,
+        'violations_emitted': 0,
+        'frames_with_external_tracks': 0,
+        'frames_with_fallback_tracks': 0,
+    }
+    for item in all_metrics.values():
+        if not isinstance(item, dict):
+            continue
+        for k in agg:
+            agg[k] += int(item.get(k, 0) or 0)
+    return agg
+
+
+def _build_signal_timing_suggestion(metrics):
+    frames = max(int(metrics.get('frames_processed', 0) or 0), 1)
+    avg_tracks = float(metrics.get('tracks_emitted', 0) or 0) / frames
+    violation_rate = float(metrics.get('violations_emitted', 0) or 0) / frames
+    fallback_ratio = float(metrics.get('frames_with_fallback_tracks', 0) or 0) / frames
+
+    if avg_tracks >= 6.0 or violation_rate >= 0.08:
+        profile = 'high_congestion'
+        durations = {'RED': 8, 'GREEN': 20, 'YELLOW': 3}
+    elif avg_tracks >= 3.0 or violation_rate >= 0.03:
+        profile = 'medium_congestion'
+        durations = {'RED': 10, 'GREEN': 15, 'YELLOW': 3}
+    else:
+        profile = 'low_congestion'
+        durations = {'RED': 14, 'GREEN': 10, 'YELLOW': 3}
+
+    confidence = 'high'
+    if fallback_ratio >= 0.7:
+        confidence = 'medium'
+    if frames < 40:
+        confidence = 'low'
+
+    rationale = [
+        f"avg_tracks_per_frame={avg_tracks:.2f}",
+        f"violation_rate={violation_rate:.3f}",
+        f"fallback_ratio={fallback_ratio:.2f}",
+        f"sample_frames={frames}",
+    ]
+
+    return {
+        'profile': profile,
+        'confidence': confidence,
+        'recommended_mode': 'timer',
+        'durations': durations,
+        'rationale': rationale,
+        'metrics_used': {
+            'frames_processed': frames,
+            'tracks_emitted': int(metrics.get('tracks_emitted', 0) or 0),
+            'violations_emitted': int(metrics.get('violations_emitted', 0) or 0),
+            'frames_with_fallback_tracks': int(metrics.get('frames_with_fallback_tracks', 0) or 0),
+        },
+    }
+
+
+@app.route('/api/signal/suggestion')
+def signal_suggestion():
+    run_id = request.args.get('run_id')
+    camera_id = request.args.get('camera_id')
+    metrics = _aggregate_runtime_metrics(run_id=run_id, camera_id=camera_id)
+    suggestion = _build_signal_timing_suggestion(metrics)
+    return jsonify({
+        'scope': {
+            'run_id': run_id,
+            'camera_id': camera_id,
+        },
+        'current_signal': SIGNAL_MANAGER.get_status() if SIGNAL_MANAGER else None,
+        'suggestion': suggestion,
+    })
+
+
+@app.route('/api/signal/apply_suggestion', methods=['POST'])
+def apply_signal_suggestion():
+    if not SIGNAL_MANAGER:
+        return jsonify({'error': 'Signal Manager not available'}), 503
+
+    data = request.json or {}
+    run_id = data.get('run_id')
+    camera_id = data.get('camera_id')
+    requested_mode = (data.get('mode') or 'timer').strip().lower()
+
+    metrics = _aggregate_runtime_metrics(run_id=run_id, camera_id=camera_id)
+    suggestion = _build_signal_timing_suggestion(metrics)
+    durations = suggestion.get('durations', {})
+
+    ok = SIGNAL_MANAGER.set_durations(
+        red=durations.get('RED'),
+        green=durations.get('GREEN'),
+        yellow=durations.get('YELLOW'),
+    )
+    if not ok:
+        return jsonify({'error': 'Could not apply suggested durations'}), 400
+
+    if requested_mode in {'manual', 'timer'}:
+        SIGNAL_MANAGER.set_mode(requested_mode)
+
+    return jsonify({
+        'ok': True,
+        'applied': suggestion,
+        'signal': SIGNAL_MANAGER.get_status(),
+    })
+
 @app.route('/api/health')
 def health():
     return jsonify({

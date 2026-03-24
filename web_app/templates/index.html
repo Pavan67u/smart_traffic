@@ -991,6 +991,11 @@
       <p class="hint" style="margin-top:0;">Live tracking metrics and scaled rule geometry for current camera/run.</p>
       <pre id="diag-metrics" style="white-space:pre-wrap; font-size:12px; color:var(--muted); max-height:180px; overflow:auto;">Loading metrics...</pre>
       <pre id="diag-rules" style="white-space:pre-wrap; font-size:12px; color:var(--muted); max-height:220px; overflow:auto;">Loading rule geometry...</pre>
+      <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:10px;">
+        <button type="button" class="button" onclick="refreshSignalSuggestion()">Refresh Timing Suggestion</button>
+        <button type="button" class="button" onclick="applySignalSuggestion()">Apply Suggestion (Timer Mode)</button>
+      </div>
+      <pre id="diag-signal" style="white-space:pre-wrap; font-size:12px; color:var(--muted); max-height:220px; overflow:auto;">Loading signal suggestion...</pre>
     </div>
     <script>
       // Fetch and display recent violations
@@ -1000,6 +1005,7 @@
         let chartData = { type: {}, time: {} };
         const metricsEl = document.getElementById('diag-metrics');
         const rulesEl = document.getElementById('diag-rules');
+        const signalEl = document.getElementById('diag-signal');
 
         function currentRunId() {
           const params = new URLSearchParams(window.location.search);
@@ -1169,6 +1175,44 @@
             })
             .catch(() => {
               rulesEl.textContent = 'Could not load rule geometry';
+            });
+
+          const signalUrl = runId
+            ? `/api/signal/suggestion?run_id=${encodeURIComponent(runId)}&camera_id=${encodeURIComponent(cameraId)}`
+            : '/api/signal/suggestion';
+          fetch(signalUrl)
+            .then(r => r.json())
+            .then(d => {
+              signalEl.textContent = JSON.stringify(d, null, 2);
+            })
+            .catch(() => {
+              signalEl.textContent = 'Could not load signal suggestion';
+            });
+        }
+
+        window.refreshSignalSuggestion = function() {
+          loadDiagnostics();
+        }
+
+        window.applySignalSuggestion = function() {
+          const cameraId = document.getElementById('camera_select')?.value || 'default';
+          const runId = currentRunId();
+          const payload = { mode: 'timer' };
+          if (runId) payload.run_id = runId;
+          if (cameraId) payload.camera_id = cameraId;
+
+          fetch('/api/signal/apply_suggestion', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+          })
+            .then(r => r.json())
+            .then(d => {
+              signalEl.textContent = JSON.stringify(d, null, 2);
+              setTimeout(loadDiagnostics, 500);
+            })
+            .catch(() => {
+              signalEl.textContent = 'Could not apply signal suggestion';
             });
         }
 

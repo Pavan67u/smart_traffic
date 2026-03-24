@@ -61,11 +61,31 @@ class SignalManager:
                 return True
             return False
 
+    def set_durations(self, red=None, green=None, yellow=None):
+        with self.lock:
+            updates = {
+                'RED': red,
+                'GREEN': green,
+                'YELLOW': yellow,
+            }
+            for key, value in updates.items():
+                if value is None:
+                    continue
+                try:
+                    iv = int(value)
+                except Exception:
+                    return False
+                if iv <= 0:
+                    return False
+                self.durations[key] = iv
+            return True
+
     def get_status(self):
         with self.lock:
             return {
                 'state': self.state,
                 'mode': self.mode,
+                'durations': dict(self.durations),
                 'last_changed': datetime.fromtimestamp(self.last_changed).isoformat(),
                 'elapsed': round(time.time() - self.last_changed, 2)
             }
