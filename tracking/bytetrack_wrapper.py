@@ -7,16 +7,31 @@ for production. This wrapper tries to import common ByteTrack packages and
 falls back to raising an informative error.
 """
 from typing import List, Dict
-try:
-    # try common bytetrack package locations (user may have installed different packages)
-    from bytetrack import BYTETracker
-except Exception:
-    BYTETracker = None
+
+
+def _load_bytetracker_class():
+    """Resolve BYTETracker from packages compatible with this wrapper API."""
+    candidates = [
+        ('bytetrack', 'BYTETracker'),
+        ('yolox.tracker.byte_tracker', 'BYTETracker'),
+    ]
+    for mod_name, attr_name in candidates:
+        try:
+            mod = __import__(mod_name, fromlist=[attr_name])
+            cls = getattr(mod, attr_name, None)
+            if cls is not None:
+                return cls
+        except Exception:
+            continue
+    return None
+
+
+BYTETracker = _load_bytetracker_class()
 
 class ByteTrackWrapper:
     def __init__(self, fps: int = 30):
         if BYTETracker is None:
-            raise RuntimeError('ByteTrack package not installed. Install bytetrack-py or provide wrapper.')
+            raise RuntimeError('BYTETracker class not found. Install ultralytics or a compatible ByteTrack package.')
         self.tracker = BYTETracker()
 
     def update(self, dets: List[List[float]], frame) -> List[Dict]:

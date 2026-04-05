@@ -59,6 +59,9 @@ def get_camera_health():
     for cam_id, count, avg_conf, last_ts in violations_by_camera:
         time_since_last = None
         if last_ts:
+            # SQLite can return naive datetimes; normalize to UTC-aware before subtracting.
+            if getattr(last_ts, 'tzinfo', None) is None:
+                last_ts = last_ts.replace(tzinfo=timezone.utc)
             delta = datetime.now(timezone.utc) - last_ts
             time_since_last = delta.total_seconds()
         
@@ -67,7 +70,7 @@ def get_camera_health():
             'avg_confidence': float(avg_conf or 0.0),
             'last_violation': last_ts.isoformat() if last_ts else None,
             'seconds_ago': time_since_last,
-            'status': 'online' if time_since_last and time_since_last < 300 else 'offline'
+            'status': 'online' if (time_since_last is not None and time_since_last < 300) else 'offline'
         }
     
     return cameras

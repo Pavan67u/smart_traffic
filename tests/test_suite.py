@@ -7,20 +7,26 @@ from web_app.models import Violation, User, AuditLog
 
 
 @pytest.fixture
-def client():
-    """Create test client."""
+def app_context():
+    """Provide a clean app context + database for each test."""
     app.config['TESTING'] = True
     app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///:memory:'
-    
+
     with app.app_context():
         db.create_all()
-        yield app.test_client()
+        yield
         db.session.remove()
         db.drop_all()
 
 
 @pytest.fixture
-def admin_user():
+def client(app_context):
+    """Create test client."""
+    yield app.test_client()
+
+
+@pytest.fixture
+def admin_user(app_context):
     """Create admin user for testing."""
     user = User(
         username='admin_test',
@@ -35,7 +41,7 @@ def admin_user():
 
 
 @pytest.fixture
-def officer_user():
+def officer_user(app_context):
     """Create officer user for testing."""
     user = User(
         username='officer_test',
@@ -118,7 +124,7 @@ class TestRBAC:
         assert officer_user.has_permission('manage_profiles')
         assert not officer_user.has_permission('delete_users')
     
-    def test_viewer_permissions(self):
+    def test_viewer_permissions(self, app_context):
         """Test viewer read-only permissions."""
         viewer = User(username='viewer', email='viewer@test.local', role='viewer')
         viewer.set_password('pass')
@@ -133,7 +139,7 @@ class TestRBAC:
 class TestViolationModel:
     """Test Violation model and database queries."""
     
-    def test_create_violation(self):
+    def test_create_violation(self, app_context):
         """Test creating a violation."""
         v = Violation(
             violation_type='red_light',
@@ -150,7 +156,7 @@ class TestViolationModel:
         assert v.violation_type == 'red_light'
         assert v.priority_level == 'high'
     
-    def test_violation_indexing(self):
+    def test_violation_indexing(self, app_context):
         """Test indexed columns for query performance."""
         # Create multiple violations
         for i in range(10):
@@ -172,7 +178,7 @@ class TestViolationModel:
         high_priority = Violation.query.filter_by(priority_level='high').all()
         assert len(high_priority) == 3
     
-    def test_violation_to_dict(self):
+    def test_violation_to_dict(self, app_context):
         """Test violation serialization."""
         v = Violation(
             violation_type='red_light',
@@ -230,7 +236,7 @@ class TestAuditLog:
 class TestAnalytics:
     """Test analytics functions."""
     
-    def test_analytics_summary(self):
+    def test_analytics_summary(self, app_context):
         """Test analytics summary generation."""
         from web_app.utils.analytics import get_analytics_summary
         
@@ -252,7 +258,7 @@ class TestAnalytics:
         assert len(summary['by_type']) > 0
         assert 'high' in summary['by_priority']
     
-    def test_camera_health(self):
+    def test_camera_health(self, app_context):
         """Test camera health metrics."""
         from web_app.utils.analytics import get_camera_health
         
@@ -269,7 +275,7 @@ class TestAnalytics:
         health = get_camera_health()
         assert 'cam1' in health or 'cam2' in health
     
-    def test_advanced_filter_query(self):
+    def test_advanced_filter_query(self, app_context):
         """Test advanced filtering."""
         from web_app.utils.analytics import build_filter_query
         
@@ -305,7 +311,7 @@ class TestAPI:
     def test_api_requires_login(self, client):
         """Test that API requires authentication."""
         response = client.get('/api/analytics/summary')
-        assert response.status_code == 401
+        assert response.status_code == 302
     
     def test_analytics_api_with_auth(self, client, admin_user):
         """Test analytics API with proper auth."""

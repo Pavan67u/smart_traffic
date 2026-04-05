@@ -1,101 +1,153 @@
 {
   "default": {
-    "stop_line_y": 260,
-    "lane_line": [
-      [
-        600,
-        0
-      ],
-      [
-        600,
-        720
-      ]
-    ],
-    "reference_resolution": [
-      1280,
-      720
-    ],
+    "description": "Default camera profile - 1280x720 (northbound traffic)",
+    "reference_resolution": [1280, 720],
+
+    "stop_line_y": 550,
     "stop_zone": [
-      [
-        0,
-        260
-      ],
-      [
-        1280,
-        260
-      ],
-      [
-        1280,
-        720
-      ],
-      [
-        0,
-        720
-      ]
-    ]
+      [0, 550],
+      [1280, 550],
+      [1280, 720],
+      [0, 720]
+    ],
+
+    "lane_line": [
+      [640, 0],
+      [640, 720]
+    ],
+
+    "direction_zone": [
+      [50, 50],
+      [1230, 50],
+      [1230, 520],
+      [50, 520]
+    ],
+    "expected_direction": [0, 1],
+    "expected_direction_label": "northbound (top to bottom)",
+
+    "zebra_crossing_zone": [
+      [100, 480],
+      [1180, 480],
+      [1180, 545],
+      [100, 545]
+    ],
+
+    "enable_wrong_way_detection": true,
+    "enable_triple_riding_detection": true,
+    "enable_zebra_crossing_detection": true,
+    "enable_emergency_detection": true,
+    "enable_heatmap": true
   },
+
   "intersection_a": {
-    "description": "Main Street North",
-    "stop_line_y": 600,
-    "lane_line": [
-      [
-        640,
-        0
-      ],
-      [
-        640,
-        720
-      ]
-    ]
-  },
-  "intersection_b": {
-    "description": "Broadway South",
-    "stop_line_y": 450,
-    "lane_line": [
-      [
-        800,
-        0
-      ],
-      [
-        800,
-        1080
-      ]
-    ]
-  },
-  "lab_cam_01": {
-    "stop_line_y": 280,
-    "lane_line": [
-      [
-        620,
-        0
-      ],
-      [
-        620,
-        720
-      ]
-    ],
-    "reference_resolution": [
-      1280,
-      720
-    ],
+    "description": "Main Street North - 1920x1080 (vertical lane)",
+    "reference_resolution": [1920, 1080],
+
+    "stop_line_y": 800,
     "stop_zone": [
-      [
-        0,
-        280
-      ],
-      [
-        1280,
-        280
-      ],
-      [
-        1280,
-        720
-      ],
-      [
-        0,
-        720
-      ]
+      [0, 800],
+      [1920, 800],
+      [1920, 1080],
+      [0, 1080]
     ],
-    "description": "Lab Camera 01"
+
+    "lane_line": [
+      [960, 0],
+      [960, 1080]
+    ],
+
+    "direction_zone": [
+      [100, 100],
+      [1820, 100],
+      [1820, 770],
+      [100, 770]
+    ],
+    "expected_direction": [0, 1],
+    "expected_direction_label": "southbound (top to bottom)",
+
+    "zebra_crossing_zone": [
+      [150, 750],
+      [1770, 750],
+      [1770, 795],
+      [150, 795]
+    ],
+
+    "enable_wrong_way_detection": true,
+    "enable_zebra_crossing_detection": true
+  },
+
+  "intersection_b": {
+    "description": "Broadway South - 1920x1080 (horizontal traffic)",
+    "reference_resolution": [1920, 1080],
+
+    "stop_line_y": 700,
+    "stop_zone": [
+      [0, 700],
+      [1920, 700],
+      [1920, 1080],
+      [0, 1080]
+    ],
+
+    "lane_line": [
+      [520, 0],
+      [520, 1080]
+    ],
+
+    "direction_zone": [
+      [100, 100],
+      [1820, 100],
+      [1820, 670],
+      [100, 670]
+    ],
+    "expected_direction": [0, 1],
+    "expected_direction_label": "southbound (top to bottom)",
+
+    "zebra_crossing_zone": [
+      [150, 650],
+      [1770, 650],
+      [1770, 695],
+      [150, 695]
+    ],
+
+    "enable_wrong_way_detection": true,
+    "enable_zebra_crossing_detection": true
+  },
+
+  "lab_cam_01": {
+    "description": "Lab Camera 01 - 1280x720 (controlled environment)",
+    "reference_resolution": [1280, 720],
+
+    "stop_line_y": 500,
+    "stop_zone": [
+      [0, 500],
+      [1280, 500],
+      [1280, 720],
+      [0, 720]
+    ],
+
+    "lane_line": [
+      [640, 0],
+      [640, 720]
+    ],
+
+    "direction_zone": [
+      [50, 50],
+      [1230, 50],
+      [1230, 470],
+      [50, 470]
+    ],
+    "expected_direction": [0, 1],
+    "expected_direction_label": "test direction",
+
+    "zebra_crossing_zone": [
+      [100, 420],
+      [1180, 420],
+      [1180, 495],
+      [100, 495]
+    ],
+
+    "enable_wrong_way_detection": true,
+    "enable_zebra_crossing_detection": true,
+    "enable_triple_riding_detection": true
   }
 }

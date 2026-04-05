@@ -1,0 +1,13 @@
+# Merged Traffic Detection Dataset
+path: /Users/Pavan/projects/smart_traffic/training/merged_dataset
+train: train/images
+val: val/images
+test: test/images
+
+nc: 5
+names:
+  0: car
+  1: truck
+  2: bus
+  3: motorcycle
+  4: pedestrian

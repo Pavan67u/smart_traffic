@@ -662,6 +662,25 @@
               <button type="submit" class="button secondary" onclick="prepareStreamForm()">Start Live Feed</button>
             </form>
           </div>
+
+          <!-- Live Preview Card with Real-time Inference -->
+          <div class="card" id="livePreviewCard">
+            <h3>Option C · Live Preview (Real-time)</h3>
+            <p style="font-size:13px; color: var(--muted); margin-bottom:12px;">
+              Stream webcam with real-time inference, heatmap, and violation detection
+            </p>
+            <div style="margin-bottom:12px; display:flex; gap:12px; flex-wrap:wrap; font-size:14px;">
+              <label><input type="checkbox" id="enableHeatmap" checked> Show Heatmap</label>
+            </div>
+            <div style="margin-bottom:12px;">
+              <button id="startLiveBtn" class="button success" onclick="startLivePreview()">Start Live Preview</button>
+              <button id="stopLiveBtn" class="button danger" onclick="stopLivePreview()" style="display:none;">Stop Preview</button>
+            </div>
+            <div id="liveStreamContainer" style="display:none; margin-top:12px;">
+              <img id="liveStreamImg" src="" alt="Live Stream" style="max-width:100%; border-radius:8px; border:2px solid var(--accent);">
+              <div id="liveStreamStats" style="margin-top:8px; font-size:12px; color:var(--muted);"></div>
+            </div>
+          </div>
         </div>
       </section>
     </div>

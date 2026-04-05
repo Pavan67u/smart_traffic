@@ -3,14 +3,8 @@ import uuid
 from pathlib import Path
 from datetime import datetime, timezone
 
-EVENTS_DIR = Path(__file__).resolve().parents[2] / 'web_app' / 'static' / 'results' / 'events'
-# usage of web_app paths for consistency; if rules package is standalone this might need adj.
-# But app.py puts it in STATIC_DIR/results/events. 
-# red_light.py used `parents[2] / 'results' / 'events'` which might be `SmartTraffic/results/events`?
-# app.py lines 299: `out_dir / 'events'` (per run).
-# app.py line 492: `red_light.EVENTS_DIR.glob`.
-# We should probably follow red_light.py's convention for global events.
-EVENTS_DIR = Path(__file__).resolve().parents[2] / 'results' / 'events'
+# Keep rule-level events under project-root/results/events
+EVENTS_DIR = Path(__file__).resolve().parents[1] / 'results' / 'events'
 EVENTS_DIR.mkdir(parents=True, exist_ok=True)
 
 class LaneViolationRule:
@@ -29,7 +23,7 @@ class LaneViolationRule:
         # Check if they are on opposite sides
         return side(prev_c) * side(cur_c) < 0
 
-    def process_track(self, track_id, bbox, timestamp, frame_id, speed_px_s=None, class_id=None, score=None):
+    def process_track(self, track_id, bbox, timestamp, frame_id, speed_px_s=None, class_id=None, score=None, **kwargs):
         cx = (bbox[0] + bbox[2]) / 2.0
         cy = (bbox[1] + bbox[3]) / 2.0
         c = (cx, cy)

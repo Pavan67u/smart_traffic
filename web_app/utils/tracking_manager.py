@@ -20,6 +20,12 @@ try:
 except ImportError:
     LaneViolationRule = None
 
+# Disabled unstable rules (wrong-way, triple-riding, zebra-crossing, emergency-vehicle).
+WrongWayRule = None
+TripleRidingRule = None
+ZebraCrossingRule = None
+EmergencyVehicleDetector = None
+
 from pathlib import Path
 import json
 import os
@@ -188,11 +194,19 @@ def get_rule_engine(camera_id="default", frame_shape=None):
                 lane_line_scaled = [list(p1), list(p2)]
                 engines.append(LaneViolationRule((p1, p2)))
 
+        # 3/4. Wrong-way and zebra-crossing checks are intentionally disabled.
+        direction_zone_scaled = None
+        zebra_zone_scaled = None
+        expected_direction = cfg.get("expected_direction", [0, 1])
+
         RULE_GEOMETRY[cache_key] = {
             "camera_id": camera_id,
             "frame_size": [frame_w, frame_h],
             "stop_zone": [list(p) for p in stop_zone],
             "lane_line": lane_line_scaled,
+            "direction_zone": direction_zone_scaled,
+            "expected_direction": list(expected_direction) if expected_direction else None,
+            "zebra_crossing_zone": zebra_zone_scaled,
         }
             
         RULE_ENGINES[cache_key] = engines
@@ -328,4 +342,7 @@ def update_and_check(run_id, camera_id, frame_idx, frame_img, detections, fps=30
 
     m['violations_emitted'] += len(violations)
     RUNTIME_METRICS[mkey] = m
+
+    # Triple-riding check intentionally disabled.
+
     return tracks, violations

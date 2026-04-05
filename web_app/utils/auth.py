@@ -1,6 +1,6 @@
 """Authentication and authorization utilities."""
 from functools import wraps
-from flask import request, jsonify, session
+from flask import request, jsonify, session, redirect
 from web_app.models import User, AuditLog, db
 from datetime import datetime, timezone
 import json

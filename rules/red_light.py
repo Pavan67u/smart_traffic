@@ -11,7 +11,8 @@ import cv2
 from pathlib import Path
 from datetime import datetime, timezone
 
-EVENTS_DIR = Path(__file__).resolve().parents[2] / 'results' / 'events'
+# Keep rule-level events under project-root/results/events
+EVENTS_DIR = Path(__file__).resolve().parents[1] / 'results' / 'events'
 EVENTS_DIR.mkdir(parents=True, exist_ok=True)
 
 def centroid_from_bbox(bbox):

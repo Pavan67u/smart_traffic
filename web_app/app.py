@@ -24,6 +24,26 @@ try:
 except ImportError:
     SIGNAL_MANAGER = None
 
+# Import heatmap and emergency detector
+try:
+    from web_app.utils.heatmap import DensityHeatmap, VehicleCounter
+except ImportError:
+    DensityHeatmap = None
+    VehicleCounter = None
+
+EmergencyVehicleDetector = None
+
+try:
+    from web_app.utils.alerts import emit_multi_channel_alert, check_twilio_config
+except ImportError:
+    emit_multi_channel_alert = None
+    check_twilio_config = None
+
+# Global instances for heatmap and emergency detection
+HEATMAP_INSTANCES = {}  # run_id -> DensityHeatmap
+VEHICLE_COUNTERS = {}   # run_id -> VehicleCounter
+EMERGENCY_DETECTORS = {}  # run_id -> EmergencyVehicleDetector
+
 
 APP_ROOT = Path(__file__).resolve().parents[1]
 STATIC_DIR = APP_ROOT / 'web_app' / 'static'
@@ -327,6 +347,36 @@ def draw_rule_overlay(frame, camera_id='default'):
         p2 = tuple(map(int, lane_line[1]))
         cv2.line(frame, p1, p2, (255, 0, 255), 2)
         cv2.putText(frame, 'LANE LINE', p1, cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 0, 255), 2)
+
+    # Direction Zone for Wrong-Way Detection
+    direction_zone = geom.get('direction_zone')
+    if direction_zone and len(direction_zone) >= 3:
+        pts = np.array(direction_zone, dtype=np.int32)
+        cv2.polylines(frame, [pts], isClosed=True, color=(255, 100, 0), thickness=2)
+        # Draw expected direction arrow
+        expected_dir = geom.get('expected_direction')
+        if expected_dir:
+            # Draw arrow in center of zone
+            cx = int(sum(p[0] for p in direction_zone) / len(direction_zone))
+            cy = int(sum(p[1] for p in direction_zone) / len(direction_zone))
+            arrow_len = 50
+            dx, dy = expected_dir
+            end_x = int(cx + dx * arrow_len)
+            end_y = int(cy + dy * arrow_len)
+            cv2.arrowedLine(frame, (cx, cy), (end_x, end_y), (255, 100, 0), 3, tipLength=0.3)
+        cv2.putText(frame, 'DIRECTION ZONE', tuple(pts[0]), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 100, 0), 2)
+
+    # Zebra Crossing Zone
+    zebra_zone = geom.get('zebra_crossing_zone')
+    if zebra_zone and len(zebra_zone) >= 3:
+        pts = np.array(zebra_zone, dtype=np.int32)
+        # Draw with diagonal stripes pattern effect
+        cv2.polylines(frame, [pts], isClosed=True, color=(255, 255, 0), thickness=2)
+        # Fill with semi-transparent overlay
+        overlay = frame.copy()
+        cv2.fillPoly(overlay, [pts], (255, 255, 0))
+        cv2.addWeighted(overlay, 0.15, frame, 0.85, 0, frame)
+        cv2.putText(frame, 'ZEBRA CROSSING', tuple(pts[0]), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
 
 
 def process_video(input_path, output_path, run_id, camera_id='default'):
@@ -1915,6 +1965,185 @@ def signal_controller_feedback():
         'effectiveness_percent': effectiveness,
         'improvement': 'POSITIVE' if effectiveness > 0 else 'NEUTRAL'
     })
+
+
+# =============================================================================
+# Live Stream Endpoint for Real-time Webcam Processing
+# =============================================================================
+
+from flask import Response
+
+def generate_live_frames(camera_index=0, camera_id='default', enable_heatmap=True):
+    """Generator function for live webcam streaming with inference."""
+    cap = cv2.VideoCapture(camera_index)
+
+    if not cap.isOpened():
+        print(f"Failed to open camera {camera_index}")
+        return
+
+    run_id = f"live_{uuid.uuid4().hex[:8]}"
+
+    # Initialize heatmap and counter if enabled
+    heatmap = None
+    counter = None
+    emergency_detector = None
+
+    if enable_heatmap and DensityHeatmap:
+        heatmap = DensityHeatmap()
+    if VehicleCounter:
+        counter = VehicleCounter()
+    # Emergency vehicle detection intentionally disabled.
+
+    frame_idx = 0
+
+    try:
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                break
+
+            detections = []
+
+            # Run inference
+            if model is not None:
+                try:
+                    results = model.track(frame, persist=True, tracker="bytetrack.yaml",
+                                         conf=0.25, verbose=False)
+
+                    if results and results[0].boxes:
+                        for box in results[0].boxes:
+                            xyxy = box.xyxy[0].cpu().numpy()
+                            x1, y1, x2, y2 = map(int, xyxy)
+                            s = float(box.conf[0].cpu().numpy())
+                            cls_id = int(box.cls[0].cpu().numpy())
+                            tid = int(box.id[0].cpu().numpy()) if box.id is not None else -1
+
+                            # Get class name
+                            cls_name = TARGET_NAMES[cls_id] if cls_id < len(TARGET_NAMES) else str(cls_id)
+
+                            detections.append({
+                                'bbox': [x1, y1, x2, y2],
+                                'score': s,
+                                'class': cls_id,
+                                'class_name': cls_name,
+                                'track_id': tid
+                            })
+
+                            # Draw detection box
+                            color = (0, 255, 0)  # Green
+                            label = f"{cls_name} {s:.2f}"
+
+                            # Check for emergency vehicle
+                            if emergency_detector and cls_name.lower() in ['car', 'truck', 'bus']:
+                                is_emergency, score, details = emergency_detector.check_vehicle(tid, [x1, y1, x2, y2], frame)
+                                if is_emergency:
+                                    color = (0, 0, 255)  # Red for emergency
+                                    label = f"EMERGENCY {score:.2f}"
+                                    cv2.putText(frame, '!!! EMERGENCY VEHICLE !!!',
+                                               (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 255), 3)
+
+                            cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+                            cv2.putText(frame, label, (x1, y1 - 10),
+                                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+
+                            # Update counter
+                            if counter and tid >= 0:
+                                counter.count(tid, cls_id)
+
+                except Exception as e:
+                    print(f"Inference error: {e}")
+
+            # Draw rule overlays
+            draw_rule_overlay(frame, camera_id=camera_id)
+
+            # Update and render heatmap
+            if heatmap and detections:
+                heatmap.update(detections, frame.shape)
+                frame = heatmap.render_overlay(frame, alpha=0.25, show_grid=False)
+
+            # Render vehicle counter
+            if counter:
+                counter.render_overlay(frame, position=(10, 30))
+
+            # Add frame info
+            cv2.putText(frame, f'Frame: {frame_idx} | Live Stream',
+                       (frame.shape[1] - 250, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+
+            frame_idx += 1
+
+            # Encode frame as JPEG
+            ret, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
+            if not ret:
+                continue
+
+            frame_bytes = buffer.tobytes()
+
+            yield (b'--frame\r\n'
+                   b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
+
+    finally:
+        cap.release()
+
+
+@app.route('/live_stream')
+def live_stream():
+    """Live webcam stream with real-time inference overlay."""
+    camera_index = request.args.get('camera', 0, type=int)
+    camera_id = request.args.get('camera_id', 'default')
+    enable_heatmap = request.args.get('heatmap', 'true').lower() == 'true'
+
+    return Response(
+        generate_live_frames(camera_index, camera_id, enable_heatmap),
+        mimetype='multipart/x-mixed-replace; boundary=frame'
+    )
+
+
+@app.route('/api/heatmap/<run_id>')
+def get_heatmap_data(run_id):
+    """Get current heatmap statistics for a run."""
+    heatmap = HEATMAP_INSTANCES.get(run_id)
+    if heatmap:
+        return jsonify(heatmap.get_stats())
+    return jsonify({'error': 'No heatmap data for this run'}), 404
+
+
+@app.route('/api/vehicle_counts/<run_id>')
+def get_vehicle_counts(run_id):
+    """Get current vehicle counts for a run."""
+    counter = VEHICLE_COUNTERS.get(run_id)
+    if counter:
+        return jsonify(counter.get_counts())
+    return jsonify({'error': 'No counter data for this run'}), 404
+
+
+@app.route('/api/alerts/config')
+@require_login
+def get_alerts_config():
+    """Check Twilio/alerts configuration status."""
+    if check_twilio_config:
+        return jsonify(check_twilio_config())
+    return jsonify({'configured': False, 'reason': 'alerts module not loaded'})
+
+
+@app.route('/api/alerts/test', methods=['POST'])
+@require_login
+@require_role('admin')
+def test_alerts():
+    """Send test alert to configured channels."""
+    if not emit_multi_channel_alert:
+        return jsonify({'error': 'Alerts module not loaded'}), 500
+
+    test_violation = {
+        'event_type': 'test_alert',
+        'track_id': 'TEST-001',
+        'timestamp': time.strftime('%Y-%m-%dT%H:%M:%SZ'),
+        'meta': {'message': 'This is a test alert from Smart Traffic System'}
+    }
+
+    channels = request.json.get('channels', ['sms', 'whatsapp']) if request.json else ['sms', 'whatsapp']
+    results = emit_multi_channel_alert(test_violation, channels=channels)
+
+    return jsonify({'ok': True, 'results': results})
 
 
 if __name__ == '__main__':

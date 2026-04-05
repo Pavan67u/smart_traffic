@@ -1,0 +1,16 @@
+# YOLOv8 Training Configuration
+# Smart Traffic Detection Model
+
+path: /Users/Pavan/projects/smart_traffic/training/dataset
+train: train/images
+val: val/images
+test: test/images
+
+# Classes
+nc: 5
+names:
+  0: car
+  1: truck
+  2: bus
+  3: motorcycle
+  4: pedestrian
